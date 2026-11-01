@@ -1,0 +1,160 @@
+/**
+ * "Test environment" button in the Paperclip agent editor.
+ *
+ * Checks: dsh resolvable and `dsh --version` runs, Node >= 24.9, a DeepSeek key is
+ * reachable (env binding, host env or a .env file — the value is never read out),
+ * and the DSH_HOME root is writable.
+ */
+
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+import type {
+  AdapterEnvironmentCheck,
+  AdapterEnvironmentTestContext,
+  AdapterEnvironmentTestResult,
+} from "@paperclipai/adapter-utils";
+import { ensureCommandResolvable, ensurePathInEnv, parseObject } from "@paperclipai/adapter-utils/server-utils";
+import { ADAPTER_TYPE, DSH_MIN_NODE_VERSION } from "../constants.js";
+import { readDshConfig } from "./config.js";
+import { defaultDshHomesRoot, readSharedDeepseekEnv, resolveDshHome, sharedEnvFile } from "./home.js";
+
+const run = promisify(execFile);
+
+export function compareVersions(a: string, b: string): number {
+  const pa = a.replace(/^v/, "").split(/[.+-]/).map((x) => parseInt(x, 10) || 0);
+  const pb = b.replace(/^v/, "").split(/[.+-]/).map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < 3; i += 1) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+async function fileHasKey(file: string, key: string): Promise<boolean> {
+  try {
+    const text = await fs.readFile(file, "utf8");
+    return new RegExp(`^\\s*(export\\s+)?${key}\\s*=\\s*\\S`, "m").test(text);
+  } catch {
+    return false;
+  }
+}
+
+/** Env value present: a plain string, or a Paperclip secret/binding object. */
+function envBindingPresent(value: unknown): boolean {
+  if (typeof value === "string") return value.trim().length > 0;
+  return Boolean(value && typeof value === "object");
+}
+
+export async function testEnvironment(ctx: AdapterEnvironmentTestContext): Promise<AdapterEnvironmentTestResult> {
+  const config = parseObject(ctx.config);
+  const settings = readDshConfig(config);
+  const checks: AdapterEnvironmentCheck[] = [];
+  const envConfig = parseObject(config.env);
+  const plainEnv: Record<string, string> = {};
+  for (const [k, v] of Object.entries(envConfig)) if (typeof v === "string") plainEnv[k] = v;
+  const env = ensurePathInEnv({ ...process.env, ...plainEnv });
+  const cwd = typeof config.cwd === "string" && path.isAbsolute(config.cwd) ? config.cwd : os.homedir();
+
+  if (ctx.executionTarget && (ctx.executionTarget as { kind?: string }).kind && (ctx.executionTarget as { kind?: string }).kind !== "local") {
+    checks.push({
+      code: "dsh_remote_target",
+      level: "error",
+      message: "dsh_local only runs on the Paperclip host; remote execution targets are not supported.",
+    });
+  }
+
+  for (const w of settings.warnings) checks.push({ code: "dsh_config_warning", level: "warn", message: w });
+
+  // 1. dsh on PATH + version
+  let dshOk = false;
+  try {
+    await ensureCommandResolvable(settings.command, cwd, env);
+    const { stdout, stderr } = await run(settings.command, ["--version"], { cwd, env, timeout: 20_000 });
+    const version = (stdout || stderr).trim().split("\n")[0] ?? "";
+    checks.push({ code: "dsh_version", level: "info", message: `dsh ${version || "(version not reported)"}` });
+    dshOk = true;
+  } catch (err) {
+    checks.push({
+      code: "dsh_missing",
+      level: "error",
+      message: `Cannot run "${settings.command} --version".`,
+      detail: err instanceof Error ? err.message.slice(0, 400) : String(err),
+      hint: "Install with: npm install -g --prefix $HOME/.local @deepseek-ai/dsh, then set the command to the full path if it is not on PATH.",
+    });
+  }
+
+  // 2. node version (dsh's shebang uses `node` from PATH)
+  try {
+    const { stdout } = await run("node", ["--version"], { cwd, env, timeout: 10_000 });
+    const version = stdout.trim();
+    const ok = compareVersions(version, DSH_MIN_NODE_VERSION) >= 0;
+    checks.push({
+      code: ok ? "node_version" : "node_too_old",
+      level: ok ? "info" : "error",
+      message: `node ${version}${ok ? "" : ` is older than ${DSH_MIN_NODE_VERSION}, which dsh requires`}`,
+    });
+  } catch (err) {
+    checks.push({
+      code: "node_missing",
+      level: dshOk ? "warn" : "error",
+      message: "Could not run node --version on the run PATH.",
+      detail: err instanceof Error ? err.message.slice(0, 300) : String(err),
+    });
+  }
+
+  // 3. DeepSeek key — presence only, never the value
+  const homesRoot = typeof config.dshHome === "string" && config.dshHome.trim() && !config.dshHome.includes("{agentId}")
+    ? resolveDshHome(config, "probe")
+    : defaultDshHomesRoot();
+  const shared = await readSharedDeepseekEnv();
+  if (shared.warning) checks.push({ code: "dsh_shared_env_insecure", level: "warn", message: shared.warning });
+  const keySource = envBindingPresent(envConfig.DEEPSEEK_API_KEY)
+    ? "the agent's environment (Paperclip env/secret binding)"
+    : typeof process.env.DEEPSEEK_API_KEY === "string" && process.env.DEEPSEEK_API_KEY.trim()
+      ? "the Paperclip server's environment"
+      : shared.env.DEEPSEEK_API_KEY
+        ? sharedEnvFile()
+      : (await fileHasKey(path.join(cwd, ".env"), "DEEPSEEK_API_KEY"))
+        ? `${path.join(cwd, ".env")}`
+        : (await fileHasKey(path.join(homesRoot, ".env"), "DEEPSEEK_API_KEY"))
+          ? `${path.join(homesRoot, ".env")}`
+          : null;
+  checks.push(
+    keySource
+      ? { code: "deepseek_key", level: "info", message: `DEEPSEEK_API_KEY found in ${keySource}.` }
+      : {
+          code: "deepseek_key_missing",
+          level: "error",
+          message: "DEEPSEEK_API_KEY is not configured.",
+          hint: `Bind a Paperclip secret as DEEPSEEK_API_KEY in this agent's environment, or put DEEPSEEK_API_KEY=… in ${sharedEnvFile()} (mode 600) for all dsh_local agents.`,
+        },
+  );
+
+  // 4. DSH_HOME root writable
+  try {
+    await fs.mkdir(homesRoot, { recursive: true, mode: 0o700 });
+    const probe = path.join(homesRoot, `.write-probe-${process.pid}`);
+    await fs.writeFile(probe, "ok");
+    await fs.unlink(probe);
+    checks.push({ code: "dsh_home_writable", level: "info", message: `DSH_HOME root ${homesRoot} is writable.` });
+  } catch (err) {
+    checks.push({
+      code: "dsh_home_unwritable",
+      level: "error",
+      message: `DSH_HOME root ${homesRoot} is not writable.`,
+      detail: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  checks.push({
+    code: "dsh_model",
+    level: "info",
+    message: `Model ${settings.model}, permission mode ${settings.permissionMode}, ${settings.mcpServers.length} MCP server(s).`,
+  });
+
+  const status = checks.some((c) => c.level === "error") ? "fail" : checks.some((c) => c.level === "warn") ? "warn" : "pass";
+  return { adapterType: ADAPTER_TYPE, status, checks, testedAt: new Date().toISOString() };
+}

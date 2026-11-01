@@ -38,6 +38,8 @@ Provider fields:
 - baseUrl (string): OpenAI-compatible base URL (inferx default https://model.inferx.net/endpoints/v1; required for custom).
 - apiKeyEnv (string): env var holding the key (inferx default DEEPSEEK_INFERX_API_KEY; required for custom).
 - providerApi (string): openai-completions (default) | openai-responses | anthropic-messages (custom routes).
+- providerRetry (JSON object or "default"): dsh retry policy for the route ({mode, maxRetries, retryableCodes,
+  backoff: {initialDelayMs, maxDelayMs, jitterRatio}}). InferX defaults to 12 retries, 2 s doubling to 30 s.
 - providerCompat (JSON object): dsh pi-ai compat switches, e.g. {"thinkingFormat":"deepseek"}.
 - contextWindow / maxTokens (number): model capacity hints for the route.
 

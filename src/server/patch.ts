@@ -246,6 +246,16 @@ export function buildProviderRows(route: ProviderRoute): string[] {
   if (compat.length > 0) {
     lines.push("        compat:", ...compat.map(([k, v]) => `          ${JSON.stringify(k)}: ${JSON.stringify(v)}`));
   }
+  const retry = route.retryPolicy;
+  if (retry) {
+    lines.push("        retryPolicy:", `          mode: ${retry.mode}`);
+    if (retry.maxRetries !== undefined) lines.push(`          maxRetries: ${retry.maxRetries}`);
+    if (retry.retryableCodes?.length) {
+      lines.push("          retryableCodes:", ...retry.retryableCodes.map((c) => `            - ${JSON.stringify(c)}`));
+    }
+    const backoff = Object.entries(retry.backoff ?? {});
+    if (backoff.length > 0) lines.push("          backoff:", ...backoff.map(([k, v]) => `            ${k}: ${v}`));
+  }
   lines.push("        models:");
   for (const m of route.models) {
     lines.push(`          - id: ${JSON.stringify(m.id)}`);

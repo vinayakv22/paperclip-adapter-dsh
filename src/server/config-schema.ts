@@ -55,6 +55,13 @@ export function getConfigSchema(): AdapterConfigSchema {
         group: "Model",
       },
       {
+        key: "providerRetry",
+        label: "Retry policy (JSON)",
+        type: "textarea",
+        hint: 'dsh retry policy for the route, e.g. {"maxRetries":12,"backoff":{"initialDelayMs":2000,"maxDelayMs":30000}} (the InferX default), or "default" for dsh\'s own (about 15 s).',
+        group: "Model",
+      },
+      {
         key: "permissionMode",
         label: "Permission mode",
         type: "select",

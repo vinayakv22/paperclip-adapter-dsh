@@ -1,6 +1,6 @@
 {
   "name": "paperclip-adapter-dsh",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Run Paperclip agents on DeepSeek Harness (dsh) via the DeepSeek API: a native Paperclip adapter plugin (dsh_local).",
   "license": "MIT",
   "author": "vinayakv22",

@@ -263,6 +263,7 @@ both rows into the patch file from these keys:
 | `apiKeyEnv` | InferX: `DEEPSEEK_INFERX_API_KEY` | Env var holding the key; only the name is written to disk (required for a custom route) |
 | `model` | `deepseek-flash` | On InferX, `deepseek-flash` / `flash` mean `deepseek-v4.1-flash-1017-basic` |
 | `providerApi` | `openai-completions` | `openai-completions`, `openai-responses` or `anthropic-messages` (custom routes) |
+| `providerRetry` | InferX: 12 retries, 2 s to 30 s; others: dsh default | Retry policy for the route, or `"default"` |
 | `providerCompat` | none | pi-ai wire-compat switches, e.g. `{"thinkingFormat": "deepseek"}` |
 | `contextWindow` | InferX Flash: 262,144; others: dsh fallback 262,144 | The model's real window; dsh compacts the session before it fills |
 | `maxTokens` | unset (dsh default 32,768) | Output cap per request; values below 8,192 are raised to 8,192 |
@@ -295,7 +296,7 @@ For InferX the generated rows look like this:
             contextWindow: 262144
 ```
 
-Two InferX specifics the defaults account for:
+Three InferX specifics the defaults account for:
 
 - **Context window is 262,144 tokens**, not the 1,048,576 dsh assumes for `deepseek-flash` on
   DeepSeek's API. The adapter writes `contextWindow: 262144` into the route's model row so dsh's
@@ -304,6 +305,15 @@ Two InferX specifics the defaults account for:
 - **Reasoning comes out of the output budget.** The model thinks before it answers, and those tokens
   count against the output cap: a 20-token cap returned a truncated reply. The adapter leaves the cap at
   dsh's default (32,768) and raises any configured `maxTokens` below 8,192 to 8,192.
+- **The free endpoint runs out of capacity.** It answers `429 … all replicas at capacity` for about
+  a minute at a time. dsh's default retry policy gives up after roughly 15 seconds (5 retries, 0.5 s
+  doubling to 10 s), and the run then fails. The InferX route therefore carries
+  `retryPolicy: {mode: normal, maxRetries: 12, backoff: {initialDelayMs: 2000, maxDelayMs: 30000}}`,
+  which waits out about 4.5 minutes.
+  - Override it with `providerRetry`: a JSON object with dsh's `mode`, `maxRetries`,
+    `retryableCodes` and `backoff` fields.
+  - Set `providerRetry: "default"` to use dsh's own policy.
+  - A custom route uses dsh's default unless `providerRetry` is set.
 
 Prompts stay small, which matters more with the smaller window: agent instructions are synced to
 `$DSH_HOME/AGENTS.md` (dsh loads them as user-global instructions) instead of being pasted into the

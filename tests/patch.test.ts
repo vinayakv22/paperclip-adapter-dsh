@@ -26,6 +26,12 @@ describe("buildDshPatch", () => {
         "        api: openai-completions",
         '        baseURL: "https://model.inferx.net/endpoints/v1"',
         '        apiKeyEnv: "DEEPSEEK_INFERX_API_KEY"',
+        "        retryPolicy:",
+        "          mode: normal",
+        "          maxRetries: 12",
+        "          backoff:",
+        "            initialDelayMs: 2000",
+        "            maxDelayMs: 30000",
         "        models:",
         '          - id: "deepseek-v4.1-flash-1017-basic"',
         '            name: "DeepSeek V4.1 Flash (InferX)"',
@@ -73,6 +79,24 @@ describe("buildDshPatch", () => {
     expect(yaml).toContain('        transport: stdio\n        command: "npx"\n        args:\n          - "-y"');
     expect(yaml).toContain('"TOKEN": !!js "`${process.env.FS_TOKEN ?? \\"\\"}`"');
     expect(collectEnvRefs(servers)).toEqual(["FS_TOKEN", "OPENSEO_API_KEY"]);
+  });
+});
+
+describe("provider retry policy rows", () => {
+  it("renders the InferX retry policy inside its route", () => {
+    const llm = resolveProvider({ model: "deepseek-flash" }, () => true);
+    const patch = buildDshPatch({ model: llm.model, provider: llm.provider, route: llm.route, disableTelemetry: true, mcpServers: [] });
+    expect(patch).toContain(
+      ["        retryPolicy:", "          mode: normal", "          maxRetries: 12", "          backoff:", "            initialDelayMs: 2000", "            maxDelayMs: 30000", "        models:"].join("\n"),
+    );
+  });
+  it("renders retryable codes and omits the row for dsh's default", () => {
+    const custom = resolveProvider({ providerRetry: { retryableCodes: ["RATE_LIMIT"] } }, () => true);
+    expect(buildDshPatch({ model: custom.model, provider: custom.provider, route: custom.route, disableTelemetry: true, mcpServers: [] })).toContain(
+      '          retryableCodes:\n            - "RATE_LIMIT"',
+    );
+    const dflt = resolveProvider({ providerRetry: "default" }, () => true);
+    expect(buildDshPatch({ model: dflt.model, provider: dflt.provider, route: dflt.route, disableTelemetry: true, mcpServers: [] })).not.toContain("retryPolicy");
   });
 });
 

@@ -37,6 +37,26 @@ export interface ProviderModelSpec {
 }
 
 /** One `llm-pi-ai` route, rendered into the patch file. */
+/** dsh-llm retry policy for one route (dsh-llm `RetryPolicySchema`). */
+export interface RetryPolicy {
+  mode: "normal" | "always";
+  maxRetries?: number;
+  retryableCodes?: string[];
+  backoff?: { initialDelayMs?: number; maxDelayMs?: number; jitterRatio?: number };
+}
+
+/**
+ * InferX's free endpoint answers 429 "all replicas at capacity" for a minute or so at a time.
+ * dsh's default (5 retries, 0.5 s doubling to 10 s, about 15 s in total) gives up inside one
+ * such window and fails the whole run; this rides out roughly 4.5 minutes.
+ */
+export const INFERX_RETRY_POLICY: RetryPolicy = {
+  mode: "normal",
+  maxRetries: 12,
+  backoff: { initialDelayMs: 2_000, maxDelayMs: 30_000 },
+};
+const MAX_DELAY_MS = 600_000;
+
 export interface ProviderRoute {
   name: string;
   displayName: string;
@@ -45,6 +65,8 @@ export interface ProviderRoute {
   apiKeyEnv: string;
   models: ProviderModelSpec[];
   compat: Record<string, string | number | boolean>;
+  /** null: dsh's default retry policy. */
+  retryPolicy: RetryPolicy | null;
 }
 
 export interface ResolvedProvider {
@@ -94,6 +116,67 @@ function readCompat(value: unknown, warnings: string[]): Record<string, string |
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
     if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") out[k] = v;
     else warnings.push(`providerCompat.${k} must be a string, number or boolean; ignored.`);
+  }
+  return out;
+}
+
+/**
+ * Reads `providerRetry`: an object or JSON string with dsh's retry policy fields, or "default"
+ * for dsh's built-in policy. Absent: `fallback`.
+ */
+export function readRetryPolicy(value: unknown, warnings: string[], fallback: RetryPolicy | null): RetryPolicy | null {
+  let raw = value;
+  if (typeof raw === "string") {
+    const t = raw.trim();
+    if (!t) return fallback;
+    if (t === "default" || t === "dsh") return null;
+    try {
+      raw = JSON.parse(t);
+    } catch {
+      warnings.push("providerRetry is not valid JSON; using the adapter default.");
+      return fallback;
+    }
+  }
+  if (raw === undefined || raw === null) return fallback;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    warnings.push("providerRetry must be an object; using the adapter default.");
+    return fallback;
+  }
+  const r = raw as Record<string, unknown>;
+  const bad = (what: string) => {
+    warnings.push(`providerRetry.${what}; using the adapter default.`);
+    return fallback;
+  };
+  const mode = r.mode === undefined ? "normal" : r.mode;
+  if (mode !== "normal" && mode !== "always") return bad('mode must be "normal" or "always"');
+  const out: RetryPolicy = { mode };
+  for (const k of Object.keys(r)) {
+    if (!["mode", "maxRetries", "retryableCodes", "backoff"].includes(k)) return bad(`${k} is not a retry policy field`);
+  }
+  if (r.maxRetries !== undefined) {
+    if (!Number.isSafeInteger(r.maxRetries) || (r.maxRetries as number) < 0) return bad("maxRetries must be a whole number >= 0");
+    out.maxRetries = r.maxRetries as number;
+  }
+  if (r.retryableCodes !== undefined) {
+    if (!Array.isArray(r.retryableCodes) || !r.retryableCodes.every((c) => typeof c === "string" && c.trim())) {
+      return bad("retryableCodes must be a list of error codes");
+    }
+    out.retryableCodes = r.retryableCodes as string[];
+  }
+  if (r.backoff !== undefined) {
+    if (typeof r.backoff !== "object" || r.backoff === null || Array.isArray(r.backoff)) return bad("backoff must be an object");
+    const b = r.backoff as Record<string, unknown>;
+    const backoff: NonNullable<RetryPolicy["backoff"]> = {};
+    for (const [k, v] of Object.entries(b)) {
+      if (k === "initialDelayMs" || k === "maxDelayMs") {
+        if (typeof v !== "number" || !(v >= 0) || v > MAX_DELAY_MS) return bad(`backoff.${k} must be 0..${MAX_DELAY_MS} ms`);
+        backoff[k] = v;
+      } else if (k === "jitterRatio") {
+        if (typeof v !== "number" || !(v >= 0 && v <= 1)) return bad("backoff.jitterRatio must be between 0 and 1");
+        backoff.jitterRatio = v;
+      } else return bad(`backoff.${k} is not a backoff field`);
+    }
+    out.backoff = backoff;
   }
   return out;
 }
@@ -156,6 +239,7 @@ function inferx(config: Record<string, unknown>, reason: string, warnings: strin
       ),
     ],
     compat: readCompat(config.providerCompat, warnings) ?? {},
+    retryPolicy: readRetryPolicy(config.providerRetry, warnings, INFERX_RETRY_POLICY),
   };
   return { provider: INFERX_PROVIDER, model, keyEnv, route, reason, warnings };
 }
@@ -207,6 +291,7 @@ export function resolveProvider(config: Record<string, unknown>, hasKey: (name: 
     apiKeyEnv,
     models: [modelSpec(model, config, warnings)],
     compat: readCompat(config.providerCompat, warnings) ?? {},
+    retryPolicy: readRetryPolicy(config.providerRetry, warnings, null),
   };
   return { provider: requested, model, keyEnv: apiKeyEnv, route, reason: "configured", warnings };
 }

@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.5] - 2026-11-02
+
+### Fixed
+
+- InferX runs no longer fail on the free endpoint's short capacity outages
+  (`429 … all replicas at capacity`, about a minute long). dsh's default retry policy gives up after
+  about 15 seconds. The InferX route now carries a `retryPolicy` of 12 retries, backing off from 2 s
+  to 30 s.
+
+### Added
+
+- `providerRetry`: per-route retry policy override (dsh `retryPolicy` fields), or `"default"` for
+  dsh's own policy.
+
 ## [0.1.4] - 2026-11-02
 
 ### Added
@@ -94,6 +108,8 @@ All notable changes to this project are documented here. The format follows
 - Zero-import UI parser for readable run transcripts (thinking, tool calls, results, usage).
 - Environment test: dsh version, Node >= 24.9, DeepSeek key presence, writable `DSH_HOME`.
 
+[0.1.5]: https://github.com/vinayakv22/paperclip-adapter-dsh/compare/v0.1.4...v0.1.5
+[0.1.4]: https://github.com/vinayakv22/paperclip-adapter-dsh/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/vinayakv22/paperclip-adapter-dsh/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/vinayakv22/paperclip-adapter-dsh/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/vinayakv22/paperclip-adapter-dsh/compare/v0.1.0...v0.1.1

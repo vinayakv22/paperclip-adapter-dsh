@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveProvider } from "../src/server/provider.js";
+import { INFERX_RETRY_POLICY, readRetryPolicy, resolveProvider } from "../src/server/provider.js";
 
 const withKeys = (...names: string[]) => (name: string) => names.includes(name);
 
@@ -74,5 +74,35 @@ describe("resolveProvider", () => {
     const r = resolveProvider({ provider: "acme", baseUrl: "gw.example", model: "acme-think" }, withKeys());
     expect(r).toMatchObject({ provider: "deepseek-official", route: null });
     expect(r.warnings.join("\n")).toMatch(/needs baseUrl .*apiKeyEnv/);
+  });
+});
+
+describe("retry policy", () => {
+  const has = () => true;
+  it("gives the InferX route a long retry policy by default", () => {
+    const r = resolveProvider({ model: "deepseek-flash" }, has);
+    expect(r.route?.retryPolicy).toEqual(INFERX_RETRY_POLICY);
+  });
+  it("accepts an override, JSON or object, and 'default' for dsh's own", () => {
+    expect(resolveProvider({ providerRetry: '{"maxRetries":3,"backoff":{"maxDelayMs":5000}}' }, has).route?.retryPolicy).toEqual({
+      mode: "normal",
+      maxRetries: 3,
+      backoff: { maxDelayMs: 5000 },
+    });
+    expect(resolveProvider({ providerRetry: { mode: "always" } }, has).route?.retryPolicy).toEqual({ mode: "always" });
+    expect(resolveProvider({ providerRetry: "default" }, has).route?.retryPolicy).toBeNull();
+  });
+  it("falls back to the default on an invalid policy", () => {
+    const warnings: string[] = [];
+    expect(readRetryPolicy({ maxRetries: -1 }, warnings, INFERX_RETRY_POLICY)).toBe(INFERX_RETRY_POLICY);
+    expect(readRetryPolicy({ backoff: { maxDelayMs: 1e9 } }, warnings, null)).toBeNull();
+    expect(readRetryPolicy({ retries: 3 }, warnings, null)).toBeNull();
+    expect(readRetryPolicy("{oops", warnings, null)).toBeNull();
+    expect(warnings).toHaveLength(4);
+  });
+  it("custom routes keep dsh's default unless set", () => {
+    const base = { provider: "acme", baseUrl: "https://x.example/v1", apiKeyEnv: "ACME_KEY", model: "m1" };
+    expect(resolveProvider(base, has).route?.retryPolicy).toBeNull();
+    expect(resolveProvider({ ...base, providerRetry: { maxRetries: 8 } }, has).route?.retryPolicy).toEqual({ mode: "normal", maxRetries: 8 });
   });
 });

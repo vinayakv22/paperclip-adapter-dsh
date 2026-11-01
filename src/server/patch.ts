@@ -3,7 +3,8 @@
  *
  * A dsh patch is a YAML list of rows. A row addressed by `id` replaces that plugin's
  * whole `config`; an `insert` row mounts new plugins. The adapter uses it to:
- *   - pin the model (`agent-default-model`),
+ *   - pin the provider route and model (`agent-default-model`),
+ *   - declare an OpenAI-compatible route such as InferX (`llm-pi-ai` providers),
  *   - turn off DeepSeek session-log upload (`session-log-deepseek`),
  *   - reject approval requests (`approval` policy `never`): nobody is there to answer,
  *   - unmount the UI permission presets (`permission`), which refuse to activate when the
@@ -15,6 +16,7 @@
  */
 
 import { DEEPSEEK_PROVIDER, MANAGED_MARKER } from "../constants.js";
+import type { ProviderRoute } from "./provider.js";
 
 export type McpTransport = "stdio" | "streamable-http";
 
@@ -30,6 +32,10 @@ export interface McpServerSpec {
 
 export interface DshPatchOptions {
   model: string;
+  /** Route for `agent-default-model`; defaults to deepseek-official. */
+  provider?: string;
+  /** Extra llm-pi-ai route to declare (null/absent for deepseek-official). */
+  route?: ProviderRoute | null;
   disableTelemetry: boolean;
   mcpServers?: McpServerSpec[];
 }
@@ -181,15 +187,45 @@ export function collectEnvRefs(servers: McpServerSpec[]): string[] {
   return [...names].sort();
 }
 
+/** `llm-pi-ai` row declaring one route. The key is referenced by env var name only. */
+export function buildProviderRows(route: ProviderRoute): string[] {
+  const lines = [
+    "",
+    `# Provider route "${route.name}"; its key is read from $${route.apiKeyEnv} at request time.`,
+    "- id: llm-pi-ai",
+    "  config:",
+    "    providers:",
+    `      ${JSON.stringify(route.name)}:`,
+    `        displayName: ${JSON.stringify(route.displayName)}`,
+    `        api: ${route.api}`,
+    `        baseURL: ${JSON.stringify(route.baseURL)}`,
+    `        apiKeyEnv: ${JSON.stringify(route.apiKeyEnv)}`,
+  ];
+  const compat = Object.entries(route.compat);
+  if (compat.length > 0) {
+    lines.push("        compat:", ...compat.map(([k, v]) => `          ${JSON.stringify(k)}: ${JSON.stringify(v)}`));
+  }
+  lines.push("        models:");
+  for (const m of route.models) {
+    lines.push(`          - id: ${JSON.stringify(m.id)}`);
+    if (m.name) lines.push(`            name: ${JSON.stringify(m.name)}`);
+    if (m.contextWindow) lines.push(`            contextWindow: ${m.contextWindow}`);
+    if (m.maxTokens) lines.push(`            maxTokens: ${m.maxTokens}`);
+  }
+  return lines;
+}
+
 export function buildDshPatch(options: DshPatchOptions): string {
+  const provider = options.route?.name ?? options.provider ?? DEEPSEEK_PROVIDER;
   const lines: string[] = [
     `# ${MANAGED_MARKER}: rewritten before every run; edits here are lost.`,
     "",
     "- id: agent-default-model",
     "  config:",
-    `    provider: ${DEEPSEEK_PROVIDER}`,
+    `    provider: ${JSON.stringify(provider)}`,
     `    model: ${JSON.stringify(options.model)}`,
   ];
+  if (options.route) lines.push(...buildProviderRows(options.route));
   lines.push(
     "",
     "# Unattended run: approval requests are rejected instead of waiting for a human.",

@@ -57,7 +57,7 @@ describe("readDshConfig", () => {
     expect(c.extraArgs).toEqual([]);
     expect(c.timeoutSec).toBe(3600);
     expect(c.graceSec).toBe(30);
-    expect(c.warnings.join("\n")).toMatch(/not a DeepSeek model/);
+    expect(c.warnings).toEqual([]);
   });
   it("keeps dsh-looking commands only", () => {
     for (const ok of ["dsh", "/home/u/.local/bin/dsh", "C:\\tools\\dsh.cmd", "my-dsh-wrapper", "fake-dsh.mjs"]) {
@@ -109,7 +109,7 @@ describe("createServerAdapter", () => {
     expect(a.supportsLocalAgentJwt).toBe(true);
     expect(a.supportsInstructionsBundle).toBe(true);
     expect(a.instructionsPathKey).toBe("instructionsFilePath");
-    expect(a.models!.map((m) => m.id)).toEqual(["deepseek-flash", "deepseek-v4-pro"]);
+    expect(a.models!.map((m) => m.id)).toEqual(["deepseek-flash", "deepseek-v4-pro", "deepseek-v4.1-flash-1017-basic"]);
     for (const fn of [a.execute, a.testEnvironment, a.listSkills, a.syncSkills, a.getConfigSchema]) expect(typeof fn).toBe("function");
     expect(a.sessionCodec).toBeDefined();
     expect(a.agentConfigurationDoc).toContain("dsh_local");

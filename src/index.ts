@@ -25,13 +25,25 @@ Adapter: dsh_local — runs the agent on DeepSeek Harness (\`dsh\`) with the Dee
 
 Use when:
 - You want a Paperclip agent driven by DeepSeek models through dsh's tools (shell, files, web, skills, subagents).
-- You pay DeepSeek per token with your own API key.
+- You use DeepSeek's own API, the InferX OpenAI-compatible DeepSeek endpoint, or another OpenAI-compatible gateway.
 
 Required:
-- env.DEEPSEEK_API_KEY: bind a Paperclip secret. Never put the key in other fields.
+- An API key for the chosen provider, as an env binding or in ~/.paperclip-dsh/.env (mode 600, DEEPSEEK_* lines only):
+  DEEPSEEK_INFERX_API_KEY for InferX, DEEPSEEK_API_KEY for deepseek-official, apiKeyEnv for a custom route.
+  Never put a key in other fields.
+
+Provider fields:
+- provider (string): auto (default) | inferx | deepseek-official | <custom route name>.
+  auto = inferx when DEEPSEEK_INFERX_API_KEY is set and the model is a Flash model, else deepseek-official.
+- baseUrl (string): OpenAI-compatible base URL (inferx default https://model.inferx.net/endpoints/v1; required for custom).
+- apiKeyEnv (string): env var holding the key (inferx default DEEPSEEK_INFERX_API_KEY; required for custom).
+- providerApi (string): openai-completions (default) | openai-responses | anthropic-messages (custom routes).
+- providerCompat (JSON object): dsh pi-ai compat switches, e.g. {"thinkingFormat":"deepseek"}.
+- contextWindow / maxTokens (number): model capacity hints for the route.
 
 Core fields:
-- model (string): deepseek-flash (default) | deepseek-v4-pro. Aliases: flash, pro.
+- model (string): deepseek-flash (default) | deepseek-v4-pro | deepseek-v4.1-flash-1017-basic (InferX). Aliases: flash, pro.
+  On inferx, deepseek-flash / flash map to deepseek-v4.1-flash-1017-basic.
 - permissionMode (string): workspace-write (default) | read-only | danger-full-access, set as DSH_PERMISSION_MODE. Approval requests are always rejected.
 - addDirs (string[] or one path per line): not supported by dsh 0.2.x (one writable root per session); listed paths only produce a warning.
 - mcpServers (JSON object): name -> { transport: "streamable-http" | "stdio", url, headers, command, args, env }.

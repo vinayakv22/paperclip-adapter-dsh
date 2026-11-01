@@ -8,13 +8,23 @@ import { execute } from "../src/server/execute.js";
 
 const FAKE_DSH = fileURLToPath(new URL("./fixtures/fake-dsh.mjs", import.meta.url));
 const tmp: string[] = [];
+const savedEnv = { HOME: process.env.HOME, DEEPSEEK_INFERX_API_KEY: process.env.DEEPSEEK_INFERX_API_KEY };
 afterEach(async () => {
+  for (const [k, v] of Object.entries(savedEnv)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
   await Promise.all(tmp.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })));
 });
 
 async function setup(extraConfig: Record<string, unknown> = {}, sessionParams: Record<string, unknown> | null = null) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "dsh-exec-"));
   tmp.push(root);
+  // Isolate from the host: no real ~/.paperclip-dsh/.env, no ambient InferX key.
+  const userHome = path.join(root, "user");
+  await fs.mkdir(userHome, { recursive: true });
+  process.env.HOME = userHome;
+  delete process.env.DEEPSEEK_INFERX_API_KEY;
   const cwd = path.join(root, "workspace");
   const home = path.join(root, "home");
   const record = path.join(root, "calls.ndjson");
@@ -52,7 +62,7 @@ async function setup(extraConfig: Record<string, unknown> = {}, sessionParams: R
       .trim()
       .split("\n")
       .map((l) => JSON.parse(l));
-  return { ctx, cwd, home, logs, metas, calls };
+  return { ctx, cwd, home, userHome, logs, metas, calls };
 }
 
 describe("execute (fake dsh)", () => {
@@ -152,6 +162,57 @@ describe("execute (fake dsh)", () => {
     expect(result.summary).toMatch(/^Finished/);
     expect(result.timedOut).toBe(false);
   }, 20_000);
+
+  it("keeps the prompt lean: AGENTS.md stays in DSH_HOME, resume sends the compact task brief", async () => {
+    const wake = { reason: "issue_commented", comments: [{ id: "c1", body: "any update?", authorType: "user", createdAt: "2026-11-01T00:00:00Z" }] };
+    const taskContext = { paperclipTaskMarkdown: "FULL TASK BRIEF", paperclipTaskMarkdownCompact: "COMPACT BRIEF", paperclipWake: wake };
+
+    const fresh = await setup({ mcpServers: undefined, addDirs: undefined });
+    Object.assign(fresh.ctx.context as Record<string, unknown>, taskContext);
+    await execute(fresh.ctx);
+    const [first] = await fresh.calls();
+    expect(first.stdin).not.toContain("Ship carefully.");
+    expect(first.stdin).toContain("FULL TASK BRIEF");
+
+    const resumed = await setup({ mcpServers: undefined, addDirs: undefined });
+    (resumed.ctx.runtime as { sessionParams: unknown }).sessionParams = { sessionId: "ses_prev", cwd: resumed.cwd, dshHome: resumed.home };
+    Object.assign(resumed.ctx.context as Record<string, unknown>, taskContext);
+    await execute(resumed.ctx);
+    const [second] = await resumed.calls();
+    expect(second.args).toContain("--session-id");
+    expect(second.stdin).not.toContain("Ship carefully.");
+    expect(second.stdin).toContain("COMPACT BRIEF");
+    expect(second.stdin).not.toContain("FULL TASK BRIEF");
+    expect(second.stdin.length).toBeLessThan(first.stdin.length);
+  });
+
+  it("uses InferX when DEEPSEEK_INFERX_API_KEY is in the shared key file", async () => {
+    const s = await setup({ model: "deepseek-flash", mcpServers: undefined, addDirs: undefined });
+    const sharedDir = path.join(s.userHome, ".paperclip-dsh");
+    await fs.mkdir(sharedDir, { recursive: true });
+    await fs.writeFile(path.join(sharedDir, ".env"), "DEEPSEEK_INFERX_API_KEY=ix-test-not-real\nOTHER=x\n", { mode: 0o600 });
+    const result = await execute(s.ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result).toMatchObject({ provider: "inferx", biller: "inferx", model: "deepseek-v4.1-flash-1017-basic" });
+    const [call] = await s.calls();
+    expect(call.env.DEEPSEEK_INFERX_API_KEY_SET).toBe(true);
+    const patch = await fs.readFile(path.join(s.home, "paperclip.patch.yml"), "utf8");
+    expect(patch).toContain('    provider: "inferx"\n    model: "deepseek-v4.1-flash-1017-basic"');
+    expect(patch).toContain('        baseURL: "https://model.inferx.net/endpoints/v1"');
+    expect(patch).toContain('        apiKeyEnv: "DEEPSEEK_INFERX_API_KEY"');
+    expect(patch).not.toContain("ix-test-not-real");
+    expect(s.logs.join("")).toMatch(/Using DEEPSEEK_INFERX_API_KEY from .*\.paperclip-dsh\/\.env/);
+    expect(s.logs.join("")).not.toContain("ix-test-not-real");
+  });
+
+  it("stays on deepseek-official without an InferX key", async () => {
+    const s = await setup({ model: "deepseek-flash", mcpServers: undefined, addDirs: undefined });
+    const result = await execute(s.ctx);
+    expect(result).toMatchObject({ provider: "deepseek", model: "deepseek-flash" });
+    const patch = await fs.readFile(path.join(s.home, "paperclip.patch.yml"), "utf8");
+    expect(patch).toContain('    provider: "deepseek-official"');
+    expect(patch).not.toContain("llm-pi-ai");
+  });
 
   it("runs a Codex agent's config after only adapterType + model change", async () => {
     const s = await setup({

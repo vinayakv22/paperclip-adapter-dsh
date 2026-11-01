@@ -1,5 +1,12 @@
 import type { AdapterConfigSchema } from "@paperclipai/adapter-utils";
-import { DEFAULT_DSH_COMMAND, DEFAULT_DSH_MODEL, DEFAULT_GRACE_SEC, DSH_MODELS } from "../constants.js";
+import {
+  DEFAULT_DSH_COMMAND,
+  DEFAULT_DSH_MODEL,
+  DEFAULT_GRACE_SEC,
+  DSH_MODELS,
+  INFERX_BASE_URL,
+  INFERX_KEY_ENV,
+} from "../constants.js";
 
 /**
  * Declarative form for the Paperclip agent editor.
@@ -17,7 +24,34 @@ export function getConfigSchema(): AdapterConfigSchema {
         type: "combobox",
         default: DEFAULT_DSH_MODEL,
         options: DSH_MODELS.map((m) => ({ value: m.id, label: m.label })),
-        hint: "DeepSeek model id from dsh's catalog. Aliases: flash, pro.",
+        hint: "Model id. Aliases: flash, pro. On InferX, deepseek-flash/flash mean deepseek-v4.1-flash-1017-basic.",
+        group: "Model",
+      },
+      {
+        key: "provider",
+        label: "Provider",
+        type: "combobox",
+        default: "auto",
+        options: [
+          { value: "auto", label: `Auto (InferX when ${INFERX_KEY_ENV} is set, else DeepSeek)` },
+          { value: "inferx", label: "InferX (OpenAI-compatible DeepSeek endpoint)" },
+          { value: "deepseek-official", label: "DeepSeek API (DEEPSEEK_API_KEY)" },
+        ],
+        hint: "Or type a lowercase name for your own OpenAI-compatible route; it then needs base URL, key variable and model.",
+        group: "Model",
+      },
+      {
+        key: "baseUrl",
+        label: "Provider base URL",
+        type: "text",
+        hint: `OpenAI-compatible endpoint. InferX default: ${INFERX_BASE_URL}. Not used for deepseek-official.`,
+        group: "Model",
+      },
+      {
+        key: "apiKeyEnv",
+        label: "API key variable",
+        type: "text",
+        hint: `Name of the env var holding the key (never the key itself). InferX default: ${INFERX_KEY_ENV}.`,
         group: "Model",
       },
       {

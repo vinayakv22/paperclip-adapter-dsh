@@ -1,9 +1,9 @@
 /**
  * "Test environment" button in the Paperclip agent editor.
  *
- * Checks: dsh resolvable and `dsh --version` runs, Node >= 24.9, a DeepSeek key is
- * reachable (env binding, host env or a .env file — the value is never read out),
- * and the DSH_HOME root is writable.
+ * Checks: dsh resolvable and `dsh --version` runs, Node >= 24.9, the API key for the chosen
+ * provider (InferX, deepseek-official or a custom route) is reachable (env binding, host env
+ * or a .env file — the value is never read out), and the DSH_HOME root is writable.
  */
 
 import { execFile } from "node:child_process";
@@ -19,6 +19,7 @@ import type {
 import { ensureCommandResolvable, ensurePathInEnv, parseObject } from "@paperclipai/adapter-utils/server-utils";
 import { ADAPTER_TYPE, DSH_MIN_NODE_VERSION } from "../constants.js";
 import { readDshConfig } from "./config.js";
+import { resolveProvider } from "./provider.js";
 import { defaultDshHomesRoot, readSharedDeepseekEnv, resolveDshHome, sharedEnvFile } from "./home.js";
 
 const run = promisify(execFile);
@@ -105,31 +106,43 @@ export async function testEnvironment(ctx: AdapterEnvironmentTestContext): Promi
     });
   }
 
-  // 3. DeepSeek key — presence only, never the value
+  // 3. Provider + its API key — presence only, never the value
   const homesRoot = typeof config.dshHome === "string" && config.dshHome.trim() && !config.dshHome.includes("{agentId}")
     ? resolveDshHome(config, "probe")
     : defaultDshHomesRoot();
   const shared = await readSharedDeepseekEnv();
   if (shared.warning) checks.push({ code: "dsh_shared_env_insecure", level: "warn", message: shared.warning });
-  const keySource = envBindingPresent(envConfig.DEEPSEEK_API_KEY)
-    ? "the agent's environment (Paperclip env/secret binding)"
-    : typeof process.env.DEEPSEEK_API_KEY === "string" && process.env.DEEPSEEK_API_KEY.trim()
-      ? "the Paperclip server's environment"
-      : shared.env.DEEPSEEK_API_KEY
-        ? sharedEnvFile()
-      : (await fileHasKey(path.join(cwd, ".env"), "DEEPSEEK_API_KEY"))
-        ? `${path.join(cwd, ".env")}`
-        : (await fileHasKey(path.join(homesRoot, ".env"), "DEEPSEEK_API_KEY"))
-          ? `${path.join(homesRoot, ".env")}`
+  const keySourceOf = (name: string): string | null =>
+    envBindingPresent(envConfig[name])
+      ? "the agent's environment (Paperclip env/secret binding)"
+      : typeof process.env[name] === "string" && process.env[name]!.trim()
+        ? "the Paperclip server's environment"
+        : shared.env[name]
+          ? sharedEnvFile()
           : null;
+  const llm = resolveProvider(config, (name) => keySourceOf(name) !== null);
+  for (const w of llm.warnings) checks.push({ code: "dsh_provider_warning", level: "warn", message: w });
+  let keySource = keySourceOf(llm.keyEnv);
+  if (!keySource && !llm.route) {
+    // dsh's own DeepSeek route also reads <cwd>/.env and $DSH_HOME/.env.
+    if (await fileHasKey(path.join(cwd, ".env"), llm.keyEnv)) keySource = path.join(cwd, ".env");
+    else if (await fileHasKey(path.join(homesRoot, ".env"), llm.keyEnv)) keySource = path.join(homesRoot, ".env");
+  }
+  checks.push({
+    code: "dsh_provider",
+    level: "info",
+    message: `Provider ${llm.provider}${llm.route ? ` (${llm.route.baseURL})` : ""}, model ${llm.model} (${llm.reason}).`,
+  });
   checks.push(
     keySource
-      ? { code: "deepseek_key", level: "info", message: `DEEPSEEK_API_KEY found in ${keySource}.` }
+      ? { code: "deepseek_key", level: "info", message: `${llm.keyEnv} found in ${keySource}.` }
       : {
           code: "deepseek_key_missing",
           level: "error",
-          message: "DEEPSEEK_API_KEY is not configured.",
-          hint: `Bind a Paperclip secret as DEEPSEEK_API_KEY in this agent's environment, or put DEEPSEEK_API_KEY=… in ${sharedEnvFile()} (mode 600) for all dsh_local agents.`,
+          message: `${llm.keyEnv} is not configured for provider ${llm.provider}.`,
+          hint: `Bind a Paperclip secret as ${llm.keyEnv} in this agent's environment${
+            llm.keyEnv.startsWith("DEEPSEEK_") ? `, or put ${llm.keyEnv}=… in ${sharedEnvFile()} (mode 600) for all dsh_local agents` : ""
+          }.`,
         },
   );
 
@@ -152,7 +165,7 @@ export async function testEnvironment(ctx: AdapterEnvironmentTestContext): Promi
   checks.push({
     code: "dsh_model",
     level: "info",
-    message: `Model ${settings.model}, permission mode ${settings.permissionMode}, ${settings.mcpServers.length} MCP server(s).`,
+    message: `Model ${llm.model}, permission mode ${settings.permissionMode}, ${settings.mcpServers.length} MCP server(s).`,
   });
 
   const status = checks.some((c) => c.level === "error") ? "fail" : checks.some((c) => c.level === "warn") ? "warn" : "pass";

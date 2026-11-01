@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.2] - 2026-11-01
+
+### Added
+
+- Provider selection: `provider` (`auto` | `inferx` | `deepseek-official` | custom route name),
+  `baseUrl`, `apiKeyEnv`, `providerApi`, `providerCompat`, `contextWindow`, `maxTokens`. Non-DeepSeek
+  routes are declared as `llm-pi-ai` providers in the patch file and selected through
+  `agent-default-model`; keys are referenced by env var name only.
+- InferX preset: `https://model.inferx.net/endpoints/v1`, key `DEEPSEEK_INFERX_API_KEY`, model
+  `deepseek-v4.1-flash-1017-basic`. `auto` (the default) uses it when that key is set and the model is
+  a Flash model; otherwise DeepSeek's API stays the route.
+- Environment test reports the chosen provider and model and checks that provider's key variable.
+- Runs report `provider` / `biller` as the route (`inferx`, a custom name, or `deepseek`).
+- InferX Flash's model row carries `contextWindow: 262144` (its real window; dsh assumes 1,048,576 for
+  `deepseek-flash`) so compaction triggers in time. `contextWindow` / `maxTokens` are configurable.
+- `maxTokens` below 8,192 is raised to 8,192 with a warning: DeepSeek Flash spends output tokens on
+  reasoning first, so small caps truncate replies. Unset leaves dsh's default (32,768).
+- Test that AGENTS.md never enters the stdin prompt and that resumed runs send the compact task brief.
+
+### Changed
+
+- `~/.paperclip-dsh/.env` now fills every `DEEPSEEK_*` variable the agent's environment leaves unset,
+  not only when `DEEPSEEK_API_KEY` is missing.
+- The non-DeepSeek-model warning moved from config parsing to provider resolution.
+
 ## [0.1.1] - 2026-11-01
 
 ### Fixed
@@ -44,5 +69,6 @@ All notable changes to this project are documented here. The format follows
 - Zero-import UI parser for readable run transcripts (thinking, tool calls, results, usage).
 - Environment test: dsh version, Node >= 24.9, DeepSeek key presence, writable `DSH_HOME`.
 
+[0.1.2]: https://github.com/vinayakv22/paperclip-adapter-dsh/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/vinayakv22/paperclip-adapter-dsh/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/vinayakv22/paperclip-adapter-dsh/releases/tag/v0.1.0

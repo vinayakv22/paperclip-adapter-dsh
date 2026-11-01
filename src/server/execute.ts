@@ -35,6 +35,7 @@ import { ADAPTER_TYPE } from "../constants.js";
 import { buildDshArgs, buildDshEnv, readDshConfig } from "./config.js";
 import { dshPaths, ensureDshHome, readSharedDeepseekEnv, resolveDshHome, sharedEnvFile, syncAgentsMd, writeIfChanged } from "./home.js";
 import { buildDshPatch, collectEnvRefs } from "./patch.js";
+import { resolveProvider } from "./provider.js";
 import { parseSessionParams, sessionResumeBlocker } from "./session.js";
 import { linkRuntimeSkills } from "./skills.js";
 import {
@@ -49,8 +50,10 @@ import {
   type DshStreamSummary,
 } from "./stream.js";
 
-const PROVIDER = "deepseek";
-const BILLER = "deepseek";
+/** Paperclip-facing provider/biller ids: "deepseek" for DeepSeek's own API, else the route name. */
+function billingProvider(route: string): string {
+  return route === "deepseek-official" ? "deepseek" : route;
+}
 const TERMINAL_EVENT_GRACE_MS = 2_000;
 
 function nonEmpty(value: unknown): string | null {
@@ -185,20 +188,42 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const agentsMd = await syncAgentsMd(dshHome, instructionsFilePath);
   if (agentsMd.warning) await warn(`Warning: ${agentsMd.warning}`);
   const skills = await linkRuntimeSkills(config, paths.skills, (line) => note(line));
+
+  // Keys: the agent's own env/secret bindings win; the shared host file fills any DEEPSEEK_*
+  // variable still unset (Codex agents swapped to dsh_local carry no DeepSeek binding).
+  const shared = await readSharedDeepseekEnv();
+  if (shared.warning) await warn(`Warning: ${shared.warning}`);
+  const fromShared: string[] = [];
+  for (const [k, v] of Object.entries(shared.env)) {
+    if (!nonEmpty(runtimeEnv[k])) {
+      runtimeEnv[k] = v;
+      fromShared.push(k);
+    }
+  }
+  if (fromShared.length > 0) await note(`Using ${fromShared.sort().join(", ")} from ${sharedEnvFile()}.`);
+
+  const llm = resolveProvider(config, (name) => Boolean(nonEmpty(runtimeEnv[name])));
+  for (const w of llm.warnings) await warn(w);
+  await note(`Provider ${llm.provider}, model ${llm.model} (${llm.reason}).`);
+  if (!nonEmpty(runtimeEnv[llm.keyEnv])) {
+    await warn(
+      llm.route
+        ? `${llm.keyEnv} is not set in the run environment; requests to ${llm.provider} will fail with MISSING_CREDENTIAL.`
+        : `${llm.keyEnv} is not in the run environment; dsh will look in <cwd>/.env and $DSH_HOME/.env.`,
+    );
+  }
   await writeIfChanged(
     paths.patch,
-    buildDshPatch({ model: settings.model, disableTelemetry: settings.disableTelemetry, mcpServers: settings.mcpServers }),
+    buildDshPatch({
+      model: llm.model,
+      provider: llm.provider,
+      route: llm.route,
+      disableTelemetry: settings.disableTelemetry,
+      mcpServers: settings.mcpServers,
+    }),
   );
   for (const name of collectEnvRefs(settings.mcpServers)) {
     if (!nonEmpty(runtimeEnv[name])) await warn(`MCP config references \${${name}} but it is not set in the run environment.`);
-  }
-  if (!nonEmpty(runtimeEnv.DEEPSEEK_API_KEY)) {
-    // Codex agents swapped to dsh_local carry no DeepSeek binding: use the shared key file.
-    const shared = await readSharedDeepseekEnv();
-    if (shared.warning) await warn(`Warning: ${shared.warning}`);
-    for (const [k, v] of Object.entries(shared.env)) if (!nonEmpty(runtimeEnv[k])) runtimeEnv[k] = v;
-    if (nonEmpty(runtimeEnv.DEEPSEEK_API_KEY)) await note(`Using DEEPSEEK_API_KEY from ${sharedEnvFile()}.`);
-    else await note("DEEPSEEK_API_KEY is not in the run environment; dsh will look in <cwd>/.env and $DSH_HOME/.env.");
   }
 
   // ── session ──────────────────────────────────────────────────────────────────
@@ -281,7 +306,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         cwd,
         commandArgs: args,
         commandNotes: [
-          `Model ${settings.model} via ${paths.patch}; task on stdin (${prompt.length} chars).`,
+          `Provider ${llm.provider}, model ${llm.model} via ${paths.patch}; task on stdin (${prompt.length} chars).`,
           `DSH_HOME ${dshHome}${settings.disableTelemetry ? "; session-log upload disabled" : ""}; permission mode ${settings.permissionMode}, approvals rejected.`,
           agentsMd.chars > 0 ? `Agent instructions synced to ${paths.agentsMd} from ${instructionsFilePath}.` : "",
           skills.length > 0 ? `${skills.length} Paperclip skill(s) linked into ${paths.skills}.` : "",
@@ -327,7 +352,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     const { proc, summary } = run;
     const sessionId = summary.sessionId ?? (retriedFresh ? null : resumeId);
-    const sessionParams = sessionId ? { sessionId, cwd, dshHome, model: settings.model } : null;
+    const sessionParams = sessionId ? { sessionId, cwd, dshHome, model: llm.model } : null;
     const success = !proc.timedOut && isDshSuccess(proc.exitCode, summary);
     const failureText = [...summary.errors, proc.stderr].join("\n");
     const errorCode = proc.timedOut
@@ -354,10 +379,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       errorCode,
       usage: toPaperclipUsage(summary.usage),
       usageBasis: "per_run",
-      provider: PROVIDER,
-      biller: BILLER,
+      provider: billingProvider(llm.provider),
+      biller: billingProvider(llm.provider),
       billingType: "api",
-      model: settings.model,
+      model: llm.model,
       sessionId,
       sessionParams,
       sessionDisplayId: sessionId,

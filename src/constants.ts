@@ -11,8 +11,25 @@ export const DEFAULT_DSH_COMMAND = "dsh";
 /** dsh profile used for one-shot runs. Built on dsh-base (tools, skills, AGENTS.md, sessions). */
 export const DSH_PROFILE = "headless";
 
-/** DeepSeek's own provider id inside dsh. */
+/** DeepSeek's own provider id inside dsh, and the env var its key lives in. */
 export const DEEPSEEK_PROVIDER = "deepseek-official";
+export const DEEPSEEK_KEY_ENV = "DEEPSEEK_API_KEY";
+
+/** InferX: an OpenAI-compatible DeepSeek endpoint, mounted as an llm-pi-ai route. */
+export const INFERX_PROVIDER = "inferx";
+export const INFERX_BASE_URL = "https://model.inferx.net/endpoints/v1";
+export const INFERX_KEY_ENV = "DEEPSEEK_INFERX_API_KEY";
+export const INFERX_DEFAULT_MODEL = "deepseek-v4.1-flash-1017-basic";
+/** InferX serves that model with a 262,144-token window (dsh assumes 1,048,576 for deepseek-flash). */
+export const INFERX_CONTEXT_WINDOW = 262_144;
+/**
+ * Smallest output cap the adapter writes for a route. DeepSeek Flash spends output tokens on
+ * reasoning before answering, so a small cap truncates replies. Unset = dsh's default (32,768).
+ */
+export const MIN_MAX_TOKENS = 8_192;
+
+/** Values accepted by the `provider` config key (any other lowercase name is a custom route). */
+export const PROVIDER_CHOICES = ["auto", INFERX_PROVIDER, DEEPSEEK_PROVIDER] as const;
 
 /** dsh's own default model. */
 export const DEFAULT_DSH_MODEL = "deepseek-flash";
@@ -24,6 +41,7 @@ export const DSH_MIN_NODE_VERSION = "24.9.0";
 export const DSH_MODELS = [
   { id: "deepseek-flash", label: "DeepSeek V4.1 Flash (fast, low cost)" },
   { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro (complex, quality-critical work)" },
+  { id: "deepseek-v4.1-flash-1017-basic", label: "DeepSeek V4.1 Flash on InferX (provider inferx)" },
 ];
 
 /** Shorthands and older catalog names that dsh releases have used for the same models. */

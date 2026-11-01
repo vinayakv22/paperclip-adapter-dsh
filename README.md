@@ -2,7 +2,7 @@
 
 # paperclip-adapter-dsh
 
-**Run [Paperclip](https://github.com/paperclipai/paperclip) agents on [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) with your own DeepSeek API key.**
+**Run [Paperclip](https://github.com/paperclipai/paperclip) agents on [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) with DeepSeek's API, InferX, or any OpenAI-compatible endpoint.**
 
 [![CI](https://github.com/vinayakv22/paperclip-adapter-dsh/actions/workflows/ci.yml/badge.svg)](https://github.com/vinayakv22/paperclip-adapter-dsh/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -33,6 +33,7 @@ instructions, token accounting and an environment check. The work runs on DeepSe
 - [Install on a Paperclip host](#install-on-a-paperclip-host)
 - [Configure an agent](#configure-an-agent)
 - [Fallback for Codex agents](#fallback-for-codex-agents)
+- [Providers: InferX, DeepSeek, custom](#providers-inferx-deepseek-custom)
 - [Models, MCP and permissions](#models-mcp-and-permissions)
 - [Sessions, skills and AGENTS.md](#sessions-skills-and-agentsmd)
 - [Telemetry and secrets](#telemetry-and-secrets)
@@ -95,7 +96,9 @@ Each run:
 
 ## Features
 
-- **DeepSeek models**: `deepseek-flash` (default) and `deepseek-v4-pro`, picked per agent.
+- **Providers**: InferX's OpenAI-compatible DeepSeek endpoint (picked automatically when
+  `DEEPSEEK_INFERX_API_KEY` is set), DeepSeek's own API as the fallback, or any OpenAI-compatible gateway.
+- **DeepSeek models**: `deepseek-flash` (default), `deepseek-v4-pro`, or `deepseek-v4.1-flash-1017-basic` on InferX, picked per agent.
 - **Session resume** with `--session-id` when the workspace and `DSH_HOME` match; if dsh no longer
   knows the session, the run retries fresh automatically and Paperclip's session is cleared.
 - **Managed instructions**: Paperclip's instructions bundle editor works; the file is synced to
@@ -157,18 +160,19 @@ Or add an entry to `~/.paperclip/adapter-plugins.json` and restart Paperclip:
 
 Paperclip picks up rebuilt local adapters on restart. To update: `git pull && npm install --ignore-scripts && npm run build`, then restart.
 
-### 4. Give agents a DeepSeek key
+### 4. Give agents an API key
 
-Create a Paperclip secret holding the key and bind it as `DEEPSEEK_API_KEY` in the agent's
-environment. For a host-wide default (useful for [Codex fallback](#fallback-for-codex-agents)),
-put it in `~/.paperclip-dsh/.env` instead:
+Create a Paperclip secret holding the key and bind it in the agent's environment
+(`DEEPSEEK_INFERX_API_KEY` for InferX, `DEEPSEEK_API_KEY` for DeepSeek's API). For a host-wide default
+(useful for [Codex fallback](#fallback-for-codex-agents)), put it in `~/.paperclip-dsh/.env` instead:
 
 ```sh
-sudo -u paperclip -H bash -c 'umask 077; mkdir -p ~/.paperclip-dsh; read -rsp "DeepSeek key: " k; echo; printf "DEEPSEEK_API_KEY=%s\n" "$k" > ~/.paperclip-dsh/.env'
+sudo -u paperclip -H bash -c 'umask 077; mkdir -p ~/.paperclip-dsh; read -rsp "DeepSeek key: " k; echo; printf "DEEPSEEK_API_KEY=%s\n" "$k" >> ~/.paperclip-dsh/.env'
 ```
 
-The adapter only reads `DEEPSEEK_*` lines from that file, only when the agent has no key of its own,
-and refuses the file unless it is mode `600`.
+Use the same command with `DEEPSEEK_INFERX_API_KEY` for the InferX key; both can live in the file.
+The adapter only reads `DEEPSEEK_*` lines from that file, uses each one only when the agent's own
+environment does not set that variable, and refuses the file unless it is mode `600`.
 
 ## Configure an agent
 
@@ -244,15 +248,87 @@ Things the swapping process should take care of:
 - **Tools differ.** MCP servers configured through Codex `-c` flags do not carry over; give the
   agent `mcpServers` if it needs them under dsh.
 
-## Models, MCP and permissions
+## Providers: InferX, DeepSeek, custom
 
-**Models.** The model is pinned with a dsh patch row, which replaces the
-`agent-default-model` plugin's config:
+dsh ships one model route, `deepseek-official` (DeepSeek's API, key `DEEPSEEK_API_KEY`). Any other
+OpenAI-compatible endpoint is declared as a route of dsh's `llm-pi-ai` plugin
+(`@deepseek-ai/dsh-llm-pi-ai`), and `agent-default-model` points the agent at it. The adapter writes
+both rows into the patch file from these keys:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `provider` | `auto` | `auto`, `inferx`, `deepseek-official`, or a lowercase name for your own route |
+| `baseUrl` | InferX: `https://model.inferx.net/endpoints/v1` | OpenAI-compatible base URL (required for a custom route) |
+| `apiKeyEnv` | InferX: `DEEPSEEK_INFERX_API_KEY` | Env var holding the key; only the name is written to disk (required for a custom route) |
+| `model` | `deepseek-flash` | On InferX, `deepseek-flash` / `flash` mean `deepseek-v4.1-flash-1017-basic` |
+| `providerApi` | `openai-completions` | `openai-completions`, `openai-responses` or `anthropic-messages` (custom routes) |
+| `providerCompat` | none | pi-ai wire-compat switches, e.g. `{"thinkingFormat": "deepseek"}` |
+| `contextWindow` | InferX Flash: 262,144; others: dsh fallback 262,144 | The model's real window; dsh compacts the session before it fills |
+| `maxTokens` | unset (dsh default 32,768) | Output cap per request; values below 8,192 are raised to 8,192 |
+
+**`auto`** uses InferX when `DEEPSEEK_INFERX_API_KEY` is in the run environment (an env binding or
+`~/.paperclip-dsh/.env`) and the model is a Flash model (`deepseek-flash`, `flash`, unset, or a Codex
+model left behind after a swap). Otherwise it uses `deepseek-official`, so DeepSeek's API stays the
+fallback: remove the InferX key, or set `provider: deepseek-official`, to switch back. `deepseek-v4-pro`
+always goes to DeepSeek's API.
+
+For InferX the generated rows look like this:
 
 ```yaml
 - id: agent-default-model
   config:
-    provider: deepseek-official
+    provider: "inferx"
+    model: "deepseek-v4.1-flash-1017-basic"
+
+- id: llm-pi-ai
+  config:
+    providers:
+      "inferx":
+        displayName: "InferX (DeepSeek)"
+        api: openai-completions
+        baseURL: "https://model.inferx.net/endpoints/v1"
+        apiKeyEnv: "DEEPSEEK_INFERX_API_KEY"
+        models:
+          - id: "deepseek-v4.1-flash-1017-basic"
+            name: "DeepSeek V4.1 Flash (InferX)"
+            contextWindow: 262144
+```
+
+Two InferX specifics the defaults account for:
+
+- **Context window is 262,144 tokens**, not the 1,048,576 dsh assumes for `deepseek-flash` on
+  DeepSeek's API. The adapter writes `contextWindow: 262144` into the route's model row so dsh's
+  compaction starts in time instead of after the endpoint has already rejected an oversized request.
+  Set `contextWindow` only if InferX changes it.
+- **Reasoning comes out of the output budget.** The model thinks before it answers, and those tokens
+  count against the output cap: a 20-token cap returned a truncated reply. The adapter leaves the cap at
+  dsh's default (32,768) and raises any configured `maxTokens` below 8,192 to 8,192.
+
+Prompts stay small, which matters more with the smaller window: agent instructions are synced to
+`$DSH_HOME/AGENTS.md` (dsh loads them as user-global instructions) instead of being pasted into the
+task, and a resumed session gets Paperclip's compact task brief plus the new wake events rather than
+the full brief and heartbeat template again.
+
+A custom gateway:
+
+```json
+{ "provider": "acme", "baseUrl": "https://gw.example.com/v1", "apiKeyEnv": "ACME_API_KEY", "model": "acme-think" }
+```
+
+dsh resolves `apiKeyEnv` per request; a variable that is unset fails the run with `MISSING_CREDENTIAL`.
+The environment test reports the chosen provider and model and checks that the key variable for it is
+present. Runs report `provider` / `biller` as `inferx` (or the custom route name), or `deepseek` for
+DeepSeek's API.
+
+## Models, MCP and permissions
+
+**Models.** The model is pinned with a dsh patch row, which replaces the
+`agent-default-model` plugin's config (DeepSeek's API shown; see [Providers](#providers-inferx-deepseek-custom) for InferX):
+
+```yaml
+- id: agent-default-model
+  config:
+    provider: "deepseek-official"
     model: "deepseek-v4-pro"
 ```
 
@@ -317,7 +393,9 @@ run retries once without it. Resetting the session in Paperclip starts fresh on 
 |---|---|
 | Environment test: `Cannot run "dsh --version"` | Install dsh for the Paperclip user, or set `command` to the absolute path (e.g. `/home/paperclip/.local/bin/dsh`). |
 | `node … is older than 24.9.0` | The `node` on the Paperclip user's `PATH` is too old for dsh. Upgrade Node or put a newer one first on `PATH`. |
-| `authentication_required` / DeepSeek 401 | `DEEPSEEK_API_KEY` is missing or wrong. Check the secret binding or `~/.paperclip-dsh/.env` (mode 600). |
+| `authentication_required` / DeepSeek 401 | The key for the chosen provider (`DEEPSEEK_INFERX_API_KEY` or `DEEPSEEK_API_KEY`) is missing or wrong. Check the secret binding or `~/.paperclip-dsh/.env` (mode 600). |
+| `MISSING_CREDENTIAL` naming a route | The route's `apiKeyEnv` variable is not set in the run environment. |
+| Run log shows the wrong provider | Look for `[paperclip] Provider …, model … (auto: …)`: it says why `auto` chose it. Set `provider` explicitly to override. |
 | `rate_limited` / `insufficient_balance` | DeepSeek returned 429 / 402. Wait, or top up the account. |
 | `Not resuming dsh session …` in the log | Expected after a workspace or `DSH_HOME` change, or after a swap from another adapter. |
 | `dsh stopped: max_steps` (or another reason) | dsh ended without completing; the run is marked failed. Check the transcript for the reason. |

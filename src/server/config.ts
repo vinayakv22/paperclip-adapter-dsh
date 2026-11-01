@@ -9,7 +9,6 @@ import {
   DEFAULT_TIMEOUT_SEC,
   DSH_PROFILE,
   PERMISSION_MODES,
-  isForeignModel,
   isUnknownPermissionMode,
   looksLikeDshCommand,
   resolveDshModel,
@@ -60,9 +59,6 @@ export function readDshConfig(config: Record<string, unknown>): DshAdapterConfig
   // codex / codex-lb. Only a dsh-looking command is used; anything else runs plain `dsh`.
   const configuredCommand = typeof config.command === "string" ? config.command.trim() : "";
   const command = configuredCommand && looksLikeDshCommand(configuredCommand) ? configuredCommand : DEFAULT_DSH_COMMAND;
-  if (isForeignModel(config.model)) {
-    warnings.push(`Model "${String(config.model)}" is not a DeepSeek model; using ${resolveDshModel(config.model)}.`);
-  }
   if (isUnknownPermissionMode(config.permissionMode)) {
     warnings.push(
       `permissionMode "${String(config.permissionMode)}" is not a dsh mode (${PERMISSION_MODES.join(", ")}); using ${resolvePermissionMode(config.permissionMode)}.`,

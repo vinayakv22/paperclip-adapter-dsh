@@ -39,6 +39,7 @@ if (process.env.FAKE_DSH_RECORD) {
         PAPERCLIP_TASK_ID: process.env.PAPERCLIP_TASK_ID,
         PAPERCLIP_API_KEY_SET: Boolean(process.env.PAPERCLIP_API_KEY),
         DEEPSEEK_API_KEY_SET: Boolean(process.env.DEEPSEEK_API_KEY),
+        DEEPSEEK_INFERX_API_KEY_SET: Boolean(process.env.DEEPSEEK_INFERX_API_KEY),
       },
     }) + "\n",
   );

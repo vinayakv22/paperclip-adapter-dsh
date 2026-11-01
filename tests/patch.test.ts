@@ -1,13 +1,47 @@
 import { describe, expect, it } from "vitest";
 import { buildDshPatch, collectEnvRefs, normalizeMcpServers, yamlScalar } from "../src/server/patch.js";
+import { resolveProvider } from "../src/server/provider.js";
 
 describe("buildDshPatch", () => {
   it("pins the model and disables session-log upload", () => {
     const yaml = buildDshPatch({ model: "deepseek-v4-pro", disableTelemetry: true });
-    expect(yaml).toContain("- id: agent-default-model\n  config:\n    provider: deepseek-official\n    model: \"deepseek-v4-pro\"");
+    expect(yaml).toContain("- id: agent-default-model\n  config:\n    provider: \"deepseek-official\"\n    model: \"deepseek-v4-pro\"");
+    expect(yaml).not.toContain("llm-pi-ai");
     expect(yaml).toContain("- id: session-log-deepseek\n  disabled: true");
     expect(yaml).not.toContain("insert");
     expect(yaml.startsWith("# managed by paperclip-adapter-dsh")).toBe(true);
+  });
+
+  it("declares an InferX route on llm-pi-ai and points the agent at it", () => {
+    const llm = resolveProvider({ provider: "inferx" }, () => false);
+    const yaml = buildDshPatch({ model: llm.model, provider: llm.provider, route: llm.route, disableTelemetry: true });
+    expect(yaml).toContain('- id: agent-default-model\n  config:\n    provider: "inferx"\n    model: "deepseek-v4.1-flash-1017-basic"');
+    expect(yaml).toContain(
+      [
+        "- id: llm-pi-ai",
+        "  config:",
+        "    providers:",
+        '      "inferx":',
+        '        displayName: "InferX (DeepSeek)"',
+        "        api: openai-completions",
+        '        baseURL: "https://model.inferx.net/endpoints/v1"',
+        '        apiKeyEnv: "DEEPSEEK_INFERX_API_KEY"',
+        "        models:",
+        '          - id: "deepseek-v4.1-flash-1017-basic"',
+        '            name: "DeepSeek V4.1 Flash (InferX)"',
+        "            contextWindow: 262144",
+      ].join("\n"),
+    );
+    expect(yaml).not.toContain("maxTokens");
+  });
+
+  it("renders provider compat switches", () => {
+    const llm = resolveProvider(
+      { provider: "acme", baseUrl: "https://gw.example/v1", apiKeyEnv: "ACME_KEY", model: "acme-1", providerCompat: '{"thinkingFormat":"deepseek","supportsStore":false}' },
+      () => false,
+    );
+    const yaml = buildDshPatch({ model: llm.model, provider: llm.provider, route: llm.route, disableTelemetry: true });
+    expect(yaml).toContain('        compat:\n          "thinkingFormat": "deepseek"\n          "supportsStore": false\n        models:');
   });
 
   it("leaves session-log alone when telemetry is allowed", () => {

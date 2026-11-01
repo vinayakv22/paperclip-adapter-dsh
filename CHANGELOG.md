@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.7] - 2026-11-02
+
+### Fixed
+
+- `$TMPDIR` and Paperclip's scratch directories now exist inside dsh's shell sandbox. Under
+  `workspace-write`, bwrap mounts an empty `/tmp` for each command, so the `/tmp/paperclip-run-*`
+  directories were missing and `mktemp` failed. The `BASH_ENV` script recreates them, and it is now
+  installed under `workspace-write` even when there is no credential to forward.
+
+### Added
+
+- A one-line prompt note for `workspace-write` runs: `/tmp` is cleared between shell commands, so
+  keep multi-step file work inside one command. Agents were losing steps re-fetching files.
+
 ## [0.1.6] - 2026-11-02
 
 ### Added
@@ -122,6 +136,8 @@ All notable changes to this project are documented here. The format follows
 - Zero-import UI parser for readable run transcripts (thinking, tool calls, results, usage).
 - Environment test: dsh version, Node >= 24.9, DeepSeek key presence, writable `DSH_HOME`.
 
+[0.1.7]: https://github.com/vinayakv22/paperclip-adapter-dsh/compare/v0.1.6...v0.1.7
+[0.1.6]: https://github.com/vinayakv22/paperclip-adapter-dsh/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/vinayakv22/paperclip-adapter-dsh/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/vinayakv22/paperclip-adapter-dsh/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/vinayakv22/paperclip-adapter-dsh/compare/v0.1.2...v0.1.3

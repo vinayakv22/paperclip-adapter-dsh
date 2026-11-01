@@ -40,6 +40,12 @@ for __pc_n in \${${FORWARD_NAMES_VAR}-}; do
   __pc_i=$((__pc_i + 1))
 done
 unset ${FORWARD_NAMES_VAR} __pc_i __pc_n __pc_v
+# dsh's bwrap sandbox (workspace-write) mounts an empty /tmp for every command, so Paperclip's
+# per-run scratch dirs under /tmp do not exist there; recreate them so $TMPDIR and mktemp work.
+for __pc_d in "\${TMPDIR-}" "\${PAPERCLIP_TMPDIR-}" "\${PAPERCLIP_SCRATCH_DIR-}" "\${PAPERCLIP_RUN_SCRATCH_DIR-}" "\${PAPERCLIP_TASK_SCRATCH_DIR-}"; do
+  case "$__pc_d" in /tmp/?*) [ -d "$__pc_d" ] || mkdir -p "$__pc_d" 2>/dev/null || true ;; esac
+done
+unset __pc_d
 if [ -n "\${${FORWARD_PREV_BASH_ENV_VAR}-}" ]; then
   BASH_ENV="\${${FORWARD_PREV_BASH_ENV_VAR}}"
   unset ${FORWARD_PREV_BASH_ENV_VAR}
@@ -85,12 +91,15 @@ export function readForwardEnv(value: unknown, warnings: string[] = []): string[
  * @param extraNames names from `forwardEnv`.
  * @param bashEnvFile path of the BASH_ENV script ({@link BASH_ENV_SCRIPT}) inside $DSH_HOME.
  * @param inheritedBashEnv an existing BASH_ENV to chain to, if any.
+ * @param opts.always install BASH_ENV even with nothing to forward (it also recreates the
+ *                    Paperclip scratch dirs inside dsh's per-command /tmp).
  */
 export function planShellForward(
   env: Record<string, string>,
   extraNames: string[],
   bashEnvFile: string,
   inheritedBashEnv?: string,
+  opts: { always?: boolean } = {},
 ): ShellForwardPlan {
   const warnings: string[] = [];
   const wanted = [
@@ -110,14 +119,18 @@ export function planShellForward(
     if (!DSH_SCRUBBED_ENV_PATTERN.test(name)) continue; // dsh passes it through on its own
     names.push(name);
   }
-  if (names.length === 0) return { names, vars: {}, warnings };
-  const vars: Record<string, string> = {
-    [FORWARD_NAMES_VAR]: names.join(" "),
-    BASH_ENV: bashEnvFile,
-  };
+  if (names.length === 0 && !opts.always) return { names, vars: {}, warnings };
+  const vars: Record<string, string> = { BASH_ENV: bashEnvFile };
+  if (names.length > 0) vars[FORWARD_NAMES_VAR] = names.join(" ");
   names.forEach((name, i) => {
     vars[`${FORWARD_VALUE_PREFIX}${i}`] = env[name]!;
   });
   if (inheritedBashEnv && inheritedBashEnv !== bashEnvFile) vars[FORWARD_PREV_BASH_ENV_VAR] = inheritedBashEnv;
   return { names, vars, warnings };
+}
+
+/** Prompt line for workspace-write runs: bwrap gives every shell command a fresh /tmp. */
+export function renderSandboxNote(permissionMode: string): string {
+  if (permissionMode !== "workspace-write") return "";
+  return "Shell sandbox: every shell command starts with an empty /tmp (and $TMPDIR); files written there are gone by the next command. Do multi-step file work inside one command (pipes, heredocs) and keep nothing you need later outside the workspace.";
 }

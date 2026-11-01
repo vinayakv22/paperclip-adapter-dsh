@@ -473,6 +473,17 @@ The adapter puts those values back:
 - The run log says which names were forwarded:
   `[paperclip] Forwarding PAPERCLIP_API_KEY, … to the dsh shell tool via BASH_ENV`.
 
+### `/tmp` in the shell sandbox
+
+Under `workspace-write`, dsh's Linux sandbox (bwrap) mounts an empty `/tmp` for every shell command.
+A file written to `/tmp` is gone by the next command, and Paperclip's per-run scratch directories
+(`TMPDIR`, `PAPERCLIP_*SCRATCH_DIR`, all under `/tmp`) do not exist inside it.
+
+The same `BASH_ENV` script, which is always installed under `workspace-write`, recreates those
+directories at the start of each command, so `$TMPDIR` and `mktemp` work within a command. The
+prompt also gets one line telling the agent to keep multi-step file work inside one command. Only
+the workspace persists between commands.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -487,6 +498,7 @@ The adapter puts those values back:
 | `dsh stopped: max_steps` (or another reason) | dsh ended without completing; the run is marked failed. Check the transcript for the reason. |
 | Commits fail with permission errors in a worktree | dsh 0.2.x only allows writes under the workspace; use `permissionMode: danger-full-access` for that agent. |
 | Agent comments show up as the board user, or `curl …/api/agents/me` returns 401 | The run token did not reach the shell. Look for `[paperclip] Forwarding PAPERCLIP_API_KEY` in the run log (needs adapter 0.1.3+). A warning `No Paperclip run token` means Paperclip minted none: check the host's agent JWT secret. |
+| Agent re-downloads files, or `No such file or directory` under `/tmp` | Expected under `workspace-write`: each shell command gets a fresh `/tmp` (see "`/tmp` in the shell sandbox"). |
 | MCP tool missing | Look for `[paperclip] MCP config references ${X} but it is not set` in the run log, and check the server name rules (`[A-Za-z0-9_-]`). |
 
 Run logs prefix the adapter's own lines with `[paperclip]`. The generated patch is at

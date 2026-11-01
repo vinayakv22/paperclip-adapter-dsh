@@ -36,6 +36,10 @@ describe("planShellForward", () => {
     expect(planShellForward({ PAPERCLIP_RUN_ID: "r" }, [], "/h/x.sh")).toEqual({ names: [], vars: {}, warnings: [] });
   });
 
+  it("installs BASH_ENV alone when asked to, even with nothing to forward", () => {
+    expect(planShellForward({ PAPERCLIP_RUN_ID: "r" }, [], "/h/x.sh", undefined, { always: true }).vars).toEqual({ BASH_ENV: "/h/x.sh" });
+  });
+
   it("chains an inherited BASH_ENV", () => {
     const plan = planShellForward({ PAPERCLIP_API_KEY: "jwt" }, [], "/h/x.sh", "/etc/bash_env");
     expect(plan.vars.PAPERCLIP_FWD_PREV_BASH_ENV).toBe("/etc/bash_env");
@@ -63,6 +67,23 @@ function inherited(): Record<string, string> {
 }
 
 describe("BASH_ENV_SCRIPT", () => {
+  it("recreates missing /tmp scratch dirs and ignores dirs elsewhere", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "dsh-bashenv-"));
+    const scratch = `/tmp/paperclip-dsh-test-${process.pid}-${Date.now()}`;
+    try {
+      const file = path.join(dir, "env.sh");
+      await fs.writeFile(file, BASH_ENV_SCRIPT);
+      const out = execFileSync("bash", ["-c", 'test -d "$TMPDIR" && test ! -e "$PAPERCLIP_SCRATCH_DIR" && echo ok'], {
+        env: { ...inherited(), BASH_ENV: file, TMPDIR: scratch, PAPERCLIP_SCRATCH_DIR: path.join(dir, "not-tmp") },
+        encoding: "utf8",
+      });
+      expect(out.trim()).toBe("ok");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+      await fs.rm(scratch, { recursive: true, force: true });
+    }
+  });
+
   it("restores values with spaces, quotes and $ intact, unsets carriers, and chains", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "dsh-bashenv-"));
     try {

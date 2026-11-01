@@ -138,8 +138,26 @@ describe("execute (fake dsh)", () => {
     await execute(ctx);
     const [call] = await calls();
     expect(call.shell.PAPERCLIP_API_KEY).toBe("<unset>");
-    await expect(fs.access(path.join(home, "paperclip-bash-env.sh"))).rejects.toThrow();
+    // workspace-write still installs BASH_ENV (it recreates the scratch dirs), with nothing to forward.
+    expect(await fs.readFile(path.join(home, "paperclip-bash-env.sh"), "utf8")).toContain("mkdir -p");
+    expect(logs.join("")).not.toContain("Forwarding");
     expect(logs.join("")).toContain("No Paperclip run token");
+  });
+
+  it("leaves BASH_ENV alone outside workspace-write when there is nothing to forward", async () => {
+    const { ctx, home, calls } = await setup({ permissionMode: "danger-full-access" });
+    (ctx as { authToken?: string }).authToken = undefined;
+    await execute(ctx);
+    const [call] = await calls();
+    await expect(fs.access(path.join(home, "paperclip-bash-env.sh"))).rejects.toThrow();
+    expect(call.stdin).not.toContain("Shell sandbox:");
+  });
+
+  it("tells workspace-write agents that /tmp does not survive between commands", async () => {
+    const { ctx, calls } = await setup();
+    await execute(ctx);
+    const [call] = await calls();
+    expect(call.stdin).toContain("Shell sandbox: every shell command starts with an empty /tmp");
   });
 
   it("resumes a matching session", async () => {

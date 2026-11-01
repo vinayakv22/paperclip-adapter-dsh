@@ -37,7 +37,7 @@ import { dshPaths, ensureDshHome, readSharedDeepseekEnv, resolveDshHome, sharedE
 import { buildDshPatch, collectEnvRefs } from "./patch.js";
 import { resolveProvider } from "./provider.js";
 import { parseSessionParams, sessionResumeBlocker } from "./session.js";
-import { BASH_ENV_SCRIPT, planShellForward, readForwardEnv } from "./shell-env.js";
+import { BASH_ENV_SCRIPT, planShellForward, readForwardEnv, renderSandboxNote } from "./shell-env.js";
 import { linkRuntimeSkills } from "./skills.js";
 import {
   hasDshTerminalEvent,
@@ -235,13 +235,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     readForwardEnv(config.forwardEnv, forwardWarnings),
     paths.bashEnv,
     nonEmpty(runtimeEnv.BASH_ENV) ?? undefined,
+    { always: settings.permissionMode === "workspace-write" },
   );
   for (const w of [...forwardWarnings, ...forward.warnings]) await warn(w);
-  if (forward.names.length > 0) {
+  if (Object.keys(forward.vars).length > 0) {
     await writeIfChanged(paths.bashEnv, BASH_ENV_SCRIPT, 0o644);
     Object.assign(runtimeEnv, forward.vars);
+  }
+  if (forward.names.length > 0) {
     await note(`Forwarding ${forward.names.join(", ")} to the dsh shell tool via BASH_ENV (dsh scrubs credential-shaped names).`);
-  } else if (!authToken) {
+  }
+  if (!authToken) {
     await warn("No Paperclip run token (PAPERCLIP_API_KEY) for this run; API calls from the agent's shell will be unauthenticated.");
   }
 
@@ -282,6 +286,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const handoff = asString(context.paperclipSessionHandoffMarkdown, "").trim();
     const envNote = renderEnvNote(env);
     const apiNote = renderApiAccessNote(env);
+    const sandboxNote = renderSandboxNote(settings.permissionMode);
     const prompt = joinPromptSections([
       selectInitialCommunicationGuidance(context, { resumedSession: resumed }),
       bootstrap,
@@ -290,6 +295,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       handoff,
       envNote,
       apiNote,
+      sandboxNote,
       heartbeat,
     ]);
     return {
@@ -301,7 +307,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         wakePromptChars: wakePrompt.length,
         taskContextChars: taskContextNote.length,
         sessionHandoffChars: handoff.length,
-        runtimeNoteChars: envNote.length + apiNote.length,
+        runtimeNoteChars: envNote.length + apiNote.length + sandboxNote.length,
         heartbeatPromptChars: heartbeat.length,
       },
     };

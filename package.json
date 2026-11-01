@@ -1,0 +1,65 @@
+{
+  "name": "paperclip-adapter-dsh",
+  "version": "0.1.0",
+  "description": "Run Paperclip agents on DeepSeek Harness (dsh) via the DeepSeek API: a native Paperclip adapter plugin (dsh_local).",
+  "license": "MIT",
+  "author": "vinayakv22",
+  "homepage": "https://github.com/vinayakv22/paperclip-adapter-dsh#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vinayakv22/paperclip-adapter-dsh.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vinayakv22/paperclip-adapter-dsh/issues"
+  },
+  "keywords": [
+    "paperclip",
+    "paperclip-adapter",
+    "deepseek",
+    "dsh",
+    "deepseek-harness",
+    "ai-agents",
+    "coding-agent",
+    "llm"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
+    },
+    "./ui-parser": "./dist/ui-parser.js"
+  },
+  "paperclip": {
+    "adapterUiParser": "1.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "prepack": "npm run build"
+  },
+  "engines": {
+    "node": ">=24.11.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  },
+  "dependencies": {
+    "@paperclipai/adapter-utils": "^2026.1012.0"
+  }
+}

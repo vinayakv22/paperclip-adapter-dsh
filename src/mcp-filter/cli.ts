@@ -12,7 +12,7 @@ async function main(): Promise<void> {
     await relay.start(new StdioServerTransport());
   } catch (err) {
     // Lengths only, never values: tells an empty credential from a rejected one.
-    const sizes = Object.entries(args.headers).map(([name, value]) => `${name}=${value.length} chars`);
+    const sizes = Object.entries(args.headers).map(([name, value]) => `${name} is ${value.length} chars long`);
     if (sizes.length > 0) process.stderr.write(`paperclip-dsh-mcp-filter: headers sent: ${sizes.join(", ")}\n`);
     throw err;
   }

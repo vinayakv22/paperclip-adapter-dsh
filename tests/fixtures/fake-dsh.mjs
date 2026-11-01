@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Test double for `dsh`: records how it was called and replays a scripted NDJSON stream.
 // FAKE_DSH_MODE: ok (default) | unknown-session | error | hang
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 
 const args = process.argv.slice(2);
@@ -24,6 +25,14 @@ const stdin = fs.readFileSync(0, "utf8");
 const at = args.indexOf("--session-id");
 const sessionId = at >= 0 ? args[at + 1] : null;
 const mode = process.env.FAKE_DSH_MODE || "ok";
+// Like dsh's shell tool: `bash -c` with credential-shaped names scrubbed (dsh-subprocess).
+function shellSees(name) {
+  const env = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v !== undefined && !/KEY|PASSWORD|SECRET|TOKEN/i.test(k) && !k.toUpperCase().startsWith("DSH_")) env[k] = v;
+  }
+  return execFileSync("bash", ["-c", `printf %s "\${${name}-<unset>}"`], { env, encoding: "utf8" });
+}
 if (process.env.FAKE_DSH_RECORD) {
   fs.appendFileSync(
     process.env.FAKE_DSH_RECORD,
@@ -40,6 +49,12 @@ if (process.env.FAKE_DSH_RECORD) {
         PAPERCLIP_API_KEY_SET: Boolean(process.env.PAPERCLIP_API_KEY),
         DEEPSEEK_API_KEY_SET: Boolean(process.env.DEEPSEEK_API_KEY),
         DEEPSEEK_INFERX_API_KEY_SET: Boolean(process.env.DEEPSEEK_INFERX_API_KEY),
+      },
+      shell: {
+        PAPERCLIP_API_KEY: shellSees("PAPERCLIP_API_KEY"),
+        GH_TOKEN: shellSees("GH_TOKEN"),
+        DEEPSEEK_API_KEY: shellSees("DEEPSEEK_API_KEY"),
+        PAPERCLIP_FWD_V0: shellSees("PAPERCLIP_FWD_V0"),
       },
     }) + "\n",
   );

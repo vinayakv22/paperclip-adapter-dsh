@@ -46,6 +46,9 @@ Core fields:
   On inferx, deepseek-flash / flash map to deepseek-v4.1-flash-1017-basic.
 - permissionMode (string): workspace-write (default) | read-only | danger-full-access, set as DSH_PERMISSION_MODE. Approval requests are always rejected.
 - addDirs (string[] or one path per line): not supported by dsh 0.2.x (one writable root per session); listed paths only produce a warning.
+- forwardEnv (string[] or one name per line): extra credential env vars for the agent's shell tool. dsh strips names
+  matching KEY|TOKEN|SECRET|PASSWORD from shell commands; the adapter restores PAPERCLIP_API_KEY and
+  PAPERCLIP_RUNTIME_TOOLS_TOKEN (always) plus these names through BASH_ENV. DEEPSEEK_* keys are never forwarded.
 - mcpServers (JSON object): name -> { transport: "streamable-http" | "stdio", url, headers, command, args, env }.
   Use \${ENV_NAME} for secrets; they are resolved from the run environment at load time.
 - instructionsFilePath (string): agent instructions; copied to $DSH_HOME/AGENTS.md every run.

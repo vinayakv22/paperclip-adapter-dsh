@@ -106,6 +106,42 @@ describe("execute (fake dsh)", () => {
     expect(meta).not.toContain("jwt-token");
   });
 
+  it("gets the run token past dsh's shell env scrub via BASH_ENV", async () => {
+    const { ctx, home, logs, metas, calls } = await setup({
+      env: { FAKE_DSH_RECORD: "", DEEPSEEK_API_KEY: "sk-test-not-real", GH_TOKEN: "gh-not-real" },
+      forwardEnv: ["GH_TOKEN", "DEEPSEEK_API_KEY"],
+    });
+    const record = path.join(path.dirname(home), "calls.ndjson");
+    (ctx.config as { env: Record<string, string> }).env.FAKE_DSH_RECORD = record;
+    const result = await execute(ctx);
+    expect(result.exitCode).toBe(0);
+
+    const [call] = await calls();
+    expect(call.shell).toEqual({
+      PAPERCLIP_API_KEY: "jwt-token",
+      GH_TOKEN: "gh-not-real",
+      DEEPSEEK_API_KEY: "<unset>",
+      PAPERCLIP_FWD_V0: "<unset>",
+    });
+    const script = await fs.readFile(path.join(home, "paperclip-bash-env.sh"), "utf8");
+    expect(script).not.toContain("jwt-token");
+    expect(logs.join("")).toContain("Forwarding PAPERCLIP_API_KEY, GH_TOKEN to the dsh shell tool");
+    expect(logs.join("")).toContain("forwardEnv entry DEEPSEEK_API_KEY is reserved");
+    const meta = JSON.stringify(metas);
+    expect(meta).not.toContain("jwt-token");
+    expect(meta).not.toContain("gh-not-real");
+  });
+
+  it("forwards nothing and warns when Paperclip mints no run token", async () => {
+    const { ctx, home, logs, calls } = await setup();
+    (ctx as { authToken?: string }).authToken = undefined;
+    await execute(ctx);
+    const [call] = await calls();
+    expect(call.shell.PAPERCLIP_API_KEY).toBe("<unset>");
+    await expect(fs.access(path.join(home, "paperclip-bash-env.sh"))).rejects.toThrow();
+    expect(logs.join("")).toContain("No Paperclip run token");
+  });
+
   it("resumes a matching session", async () => {
     const s = await setup();
     const first = await execute(s.ctx);

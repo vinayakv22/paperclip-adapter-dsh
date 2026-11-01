@@ -37,6 +37,7 @@ import { dshPaths, ensureDshHome, readSharedDeepseekEnv, resolveDshHome, sharedE
 import { buildDshPatch, collectEnvRefs } from "./patch.js";
 import { resolveProvider } from "./provider.js";
 import { parseSessionParams, sessionResumeBlocker } from "./session.js";
+import { BASH_ENV_SCRIPT, planShellForward, readForwardEnv } from "./shell-env.js";
 import { linkRuntimeSkills } from "./skills.js";
 import {
   hasDshTerminalEvent,
@@ -224,6 +225,24 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   );
   for (const name of collectEnvRefs(settings.mcpServers)) {
     if (!nonEmpty(runtimeEnv[name])) await warn(`MCP config references \${${name}} but it is not set in the run environment.`);
+  }
+
+  // dsh scrubs credential-shaped names (…KEY/TOKEN/SECRET/PASSWORD) from its shell tool, so
+  // PAPERCLIP_API_KEY would never reach the agent's curl calls; forward them via BASH_ENV.
+  const forwardWarnings: string[] = [];
+  const forward = planShellForward(
+    env,
+    readForwardEnv(config.forwardEnv, forwardWarnings),
+    paths.bashEnv,
+    nonEmpty(runtimeEnv.BASH_ENV) ?? undefined,
+  );
+  for (const w of [...forwardWarnings, ...forward.warnings]) await warn(w);
+  if (forward.names.length > 0) {
+    await writeIfChanged(paths.bashEnv, BASH_ENV_SCRIPT, 0o644);
+    Object.assign(runtimeEnv, forward.vars);
+    await note(`Forwarding ${forward.names.join(", ")} to the dsh shell tool via BASH_ENV (dsh scrubs credential-shaped names).`);
+  } else if (!authToken) {
+    await warn("No Paperclip run token (PAPERCLIP_API_KEY) for this run; API calls from the agent's shell will be unauthenticated.");
   }
 
   // ── session ──────────────────────────────────────────────────────────────────

@@ -75,6 +75,13 @@ export function getConfigSchema(): AdapterConfigSchema {
         group: "Permissions",
       },
       {
+        key: "forwardEnv",
+        label: "Credentials for the shell tool",
+        type: "textarea",
+        hint: "dsh strips env vars named like *KEY*/*TOKEN*/*SECRET*/*PASSWORD* from its shell tool. The run's PAPERCLIP_API_KEY and PAPERCLIP_RUNTIME_TOOLS_TOKEN are always passed through; list other names (one per line, e.g. GH_TOKEN) to pass them too. DEEPSEEK_* keys are never passed.",
+        group: "Permissions",
+      },
+      {
         key: "mcpServers",
         label: "MCP servers (JSON)",
         type: "textarea",

@@ -387,6 +387,28 @@ run retries once without it. Resetting the session in Paperclip starts fresh on 
 - The agent receives a run-scoped Paperclip token as `PAPERCLIP_API_KEY` and is told to send
   `X-Paperclip-Run-Id` on writes so Paperclip can attribute its actions to the run.
 
+### Credentials in the agent's shell
+
+dsh 0.2.x strips every variable whose name matches `KEY|PASSWORD|SECRET|TOKEN` (any case) from the
+environment of the commands its shell tool runs. Without help, `$PAPERCLIP_API_KEY` is empty inside
+the agent's `curl` calls. On a local trusted Paperclip the unauthenticated calls still succeed, but
+they are recorded as the board user, not as the agent.
+
+The adapter puts those values back:
+
+- It passes each value to dsh under a name the scrub ignores (`PAPERCLIP_FWD_NAMES`,
+  `PAPERCLIP_FWD_V0`, `PAPERCLIP_FWD_V1`, …).
+- It points `BASH_ENV` at `$DSH_HOME/paperclip-bash-env.sh`. That static script holds no secret.
+  Non-interactive bash sources it before every command; it re-exports the real names and unsets the
+  carriers. An existing `BASH_ENV` is chained.
+- `PAPERCLIP_API_KEY` and `PAPERCLIP_RUNTIME_TOOLS_TOKEN` are always forwarded when Paperclip sets
+  them.
+- Other credentials, for example a `GH_TOKEN` binding, are forwarded only when listed in
+  `forwardEnv`: an array, or one name per line.
+- Provider keys (`DEEPSEEK_*`) and `DSH_*` are never forwarded; they stay with the dsh process.
+- The run log says which names were forwarded:
+  `[paperclip] Forwarding PAPERCLIP_API_KEY, … to the dsh shell tool via BASH_ENV`.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -400,6 +422,7 @@ run retries once without it. Resetting the session in Paperclip starts fresh on 
 | `Not resuming dsh session …` in the log | Expected after a workspace or `DSH_HOME` change, or after a swap from another adapter. |
 | `dsh stopped: max_steps` (or another reason) | dsh ended without completing; the run is marked failed. Check the transcript for the reason. |
 | Commits fail with permission errors in a worktree | dsh 0.2.x only allows writes under the workspace; use `permissionMode: danger-full-access` for that agent. |
+| Agent comments show up as the board user, or `curl …/api/agents/me` returns 401 | The run token did not reach the shell. Look for `[paperclip] Forwarding PAPERCLIP_API_KEY` in the run log (needs adapter 0.1.3+). A warning `No Paperclip run token` means Paperclip minted none: check the host's agent JWT secret. |
 | MCP tool missing | Look for `[paperclip] MCP config references ${X} but it is not set` in the run log, and check the server name rules (`[A-Za-z0-9_-]`). |
 
 Run logs prefix the adapter's own lines with `[paperclip]`. The generated patch is at

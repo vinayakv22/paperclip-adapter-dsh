@@ -18,6 +18,7 @@ import {
   PATCH_FILENAME,
   SKILLS_DIRNAME,
 } from "../constants.js";
+import { BASH_ENV_FILENAME } from "./shell-env.js";
 
 function expandHome(p: string): string {
   if (p === "~") return os.homedir();
@@ -87,6 +88,7 @@ export function dshPaths(home: string) {
     agentsMd: path.join(home, AGENTS_MD_FILENAME),
     skills: path.join(home, SKILLS_DIRNAME),
     patch: path.join(home, PATCH_FILENAME),
+    bashEnv: path.join(home, BASH_ENV_FILENAME),
   };
 }
 

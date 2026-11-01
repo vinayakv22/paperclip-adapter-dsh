@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.3] - 2026-11-01
+
+### Fixed
+
+- The agent's shell commands now get `PAPERCLIP_API_KEY`. dsh 0.2.x strips variables named like
+  `*KEY*`, `*TOKEN*`, `*SECRET*` and `*PASSWORD*` from its shell tool. The run token was therefore
+  missing, so agent API calls went out unauthenticated and were attributed to the board user. The
+  adapter now carries these values under neutral names and restores them through a `BASH_ENV`
+  script in `$DSH_HOME`. The script holds no secret.
+
+### Added
+
+- `forwardEnv`: extra credential variables to pass to the shell tool, e.g. `GH_TOKEN`.
+  `DEEPSEEK_*` and `DSH_*` are never forwarded.
+- A warning when Paperclip mints no run token for a run.
+
 ## [0.1.2] - 2026-11-01
 
 ### Added
@@ -69,6 +85,7 @@ All notable changes to this project are documented here. The format follows
 - Zero-import UI parser for readable run transcripts (thinking, tool calls, results, usage).
 - Environment test: dsh version, Node >= 24.9, DeepSeek key presence, writable `DSH_HOME`.
 
+[0.1.3]: https://github.com/vinayakv22/paperclip-adapter-dsh/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/vinayakv22/paperclip-adapter-dsh/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/vinayakv22/paperclip-adapter-dsh/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/vinayakv22/paperclip-adapter-dsh/releases/tag/v0.1.0

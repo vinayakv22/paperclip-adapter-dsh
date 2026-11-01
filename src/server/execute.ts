@@ -37,6 +37,7 @@ import { dshPaths, ensureDshHome, readSharedDeepseekEnv, resolveDshHome, sharedE
 import { buildDshPatch, collectEnvRefs } from "./patch.js";
 import { resolveFallback, resolveProvider, type ResolvedProvider } from "./provider.js";
 import { classifyProviderFailure, readCooldown, readCooldownSec, writeCooldown } from "./fallback.js";
+import { readIssueHandoff } from "./handoff.js";
 import { parseSessionParams, sessionResumeBlocker } from "./session.js";
 import { BASH_ENV_SCRIPT, planShellForward, readForwardEnv, renderSandboxNote } from "./shell-env.js";
 import { linkRuntimeSkills } from "./skills.js";
@@ -286,7 +287,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     context,
   };
 
-  const buildPrompt = (resumed: boolean) => {
+  const buildPrompt = (resumed: boolean, issueHandoff = "") => {
     const bootstrap = !resumed && bootstrapTemplate.trim() ? renderTemplate(bootstrapTemplate, templateData).trim() : "";
     const { taskContextNote, wakePrompt } = selectPaperclipPromptSections(context, {
       resumedSession: resumed,
@@ -296,7 +297,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       (resumed && wakePrompt.length > 0) || isPaperclipRecoveryWakePayload(context.paperclipWake)
         ? ""
         : renderTemplate(promptTemplate, templateData);
-    const handoff = asString(context.paperclipSessionHandoffMarkdown, "").trim();
+    const handoff = joinPromptSections([asString(context.paperclipSessionHandoffMarkdown, "").trim(), resumed ? "" : issueHandoff]);
     const envNote = renderEnvNote(env);
     const apiNote = renderApiAccessNote(env);
     const sandboxNote = renderSandboxNote(settings.permissionMode);
@@ -331,7 +332,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const attempt = async (sessionId: string | null, extraNote = "") => {
     await hydrateFreshSessionHandoff(ctx, { resumedSession: Boolean(sessionId) });
-    const built = buildPrompt(Boolean(sessionId));
+    const issueHandoff = sessionId ? "" : await readIssueHandoff(context);
+    if (issueHandoff) await note(`Fresh session: prepending the Codex handoff file (${issueHandoff.length} chars).`);
+    const built = buildPrompt(Boolean(sessionId), issueHandoff);
     const prompt = extraNote ? joinPromptSections([extraNote, built.prompt]) : built.prompt;
     const metrics = { ...built.metrics, promptChars: prompt.length };
     const args = buildDshArgs({

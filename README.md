@@ -246,6 +246,9 @@ Things the swapping process should take care of:
 - **Reset the session on each swap** (`POST /api/agents/:id/runtime-state/reset-session`). The
   adapter already refuses foreign sessions, but resetting keeps Codex from trying to resume a dsh
   session id when it comes back.
+- **Handoff.** To tell the agent where Codex stopped, write a condensed transcript to
+  `~/.paperclip-dsh/handoff/<issueIdentifier>.md`. The first prompt of a fresh dsh session for that
+  issue starts with it (24,000 characters at most).
 - **Tools differ.** MCP servers configured through Codex `-c` flags do not carry over; give the
   agent `mcpServers` if it needs them under dsh.
 

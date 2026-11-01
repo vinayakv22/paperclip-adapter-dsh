@@ -15,6 +15,7 @@
  * `!!js` template literal that dsh evaluates against its own environment at load time.
  */
 
+import { fileURLToPath } from "node:url";
 import { DEEPSEEK_PROVIDER, MANAGED_MARKER } from "../constants.js";
 import type { ProviderRoute } from "./provider.js";
 
@@ -28,6 +29,20 @@ export interface McpServerSpec {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
+  /** Tool allowlist (streamable-http only): the server is mounted through the filter relay. */
+  enabledTools?: string[];
+  /** Tools hidden after the allowlist is applied (streamable-http only). */
+  disabledTools?: string[];
+}
+
+/** How a filtered server is launched: `<command> <script> --url ...`. */
+export interface RelayLaunch {
+  command: string;
+  script: string;
+}
+
+export function defaultRelayLaunch(): RelayLaunch {
+  return { command: process.execPath, script: fileURLToPath(new URL("../mcp-filter/cli.js", import.meta.url)) };
 }
 
 export interface DshPatchOptions {
@@ -38,6 +53,8 @@ export interface DshPatchOptions {
   route?: ProviderRoute | null;
   disableTelemetry: boolean;
   mcpServers?: McpServerSpec[];
+  /** Override the relay launch command (tests). */
+  relay?: RelayLaunch;
 }
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -55,6 +72,21 @@ function asRecordOfStrings(value: unknown, field: string, server: string, warnin
     else warnings.push(`MCP server "${server}": ${field}.${key} is not a string; ignored.`);
   }
   return out;
+}
+
+/** A tool list given as an array, or a string with one name per line / comma. Undefined when absent. */
+function readToolList(rec: Record<string, unknown>, keys: string[], server: string, warnings: string[]): string[] | undefined {
+  for (const key of keys) {
+    const value = rec[key];
+    if (value === undefined || value === null) continue;
+    const parts = Array.isArray(value) ? value.map((v) => String(v)) : typeof value === "string" ? value.split(/[\n,]/) : null;
+    if (!parts) {
+      warnings.push(`MCP server "${server}": ${key} must be a list of tool names; ignored.`);
+      return undefined;
+    }
+    return [...new Set(parts.map((v) => v.trim()).filter(Boolean))];
+  }
+  return undefined;
 }
 
 /**
@@ -128,7 +160,16 @@ export function normalizeMcpServers(value: unknown): { servers: McpServerSpec[];
       warnings.push(`MCP server "${name}": streamable-http transport needs "url"; skipped.`);
       continue;
     }
+    const enabledTools = readToolList(rec, ["enabledTools", "enabled_tools"], name, warnings);
+    const disabledTools = readToolList(rec, ["disabledTools", "disabled_tools"], name, warnings);
+    if (transport === "stdio" && (enabledTools || (disabledTools && disabledTools.length > 0))) {
+      // Failing open would silently expose tools the operator meant to hide.
+      warnings.push(`MCP server "${name}": enabledTools/disabledTools are only supported for streamable-http servers; skipped.`);
+      continue;
+    }
     const spec: McpServerSpec = { name, transport };
+    if (enabledTools) spec.enabledTools = enabledTools;
+    if (disabledTools && disabledTools.length > 0) spec.disabledTools = disabledTools;
     if (transport === "streamable-http") {
       spec.url = url;
       const headers = asRecordOfStrings(rec.headers, "headers", name, warnings);
@@ -215,6 +256,27 @@ export function buildProviderRows(route: ProviderRoute): string[] {
   return lines;
 }
 
+/**
+ * A tool-filtered HTTP server is mounted as a stdio server running the relay. Header values
+ * (which may hold `${SECRET}` references) travel as the relay's env, not argv: dsh scrubs
+ * credential-shaped names from the ambient env it hands a stdio child but not from the
+ * server's own `env`, so the key reaches the relay while staying out of the patch file and `ps`.
+ */
+function relayConfigLines(s: McpServerSpec, index: number, launch: RelayLaunch): string[] {
+  const args = [launch.script, "--url", s.url!];
+  const env: Record<string, string> = {};
+  Object.entries(s.headers ?? {}).forEach(([header, value], i) => {
+    const envName = `PAPERCLIP_MCP_RELAY_${index}_H${i}`;
+    env[envName] = value;
+    args.push("--header-env", `${header}=${envName}`);
+  });
+  if (s.enabledTools) args.push(...(s.enabledTools.length > 0 ? ["--enable", s.enabledTools.join(",")] : ["--enable-none"]));
+  if (s.disabledTools) args.push("--disable", s.disabledTools.join(","));
+  const lines = ["        transport: stdio", `        command: ${yamlScalar(launch.command)}`, "        args:", ...args.map((a) => `          - ${yamlScalar(a)}`)];
+  if (Object.keys(env).length > 0) lines.push("        env:", ...yamlMap(env, "          "));
+  return lines;
+}
+
 export function buildDshPatch(options: DshPatchOptions): string {
   const provider = options.route?.name ?? options.provider ?? DEEPSEEK_PROVIDER;
   const lines: string[] = [
@@ -243,23 +305,24 @@ export function buildDshPatch(options: DshPatchOptions): string {
   const servers = options.mcpServers ?? [];
   if (servers.length > 0) {
     lines.push("", "- insert:");
-    for (const s of servers) {
+    servers.forEach((s, index) => {
       lines.push(
         `    - id: ${JSON.stringify(`mcp-${s.name}`)}`,
         "      name: '@deepseek-ai/dsh-mcp-client'",
         "      config:",
         `        serverName: ${JSON.stringify(s.name)}`,
-        `        transport: ${s.transport}`,
       );
-      if (s.transport === "streamable-http") {
-        lines.push(`        url: ${yamlScalar(s.url!)}`);
+      if (s.transport === "streamable-http" && (s.enabledTools || s.disabledTools)) {
+        lines.push(...relayConfigLines(s, index, options.relay ?? defaultRelayLaunch()));
+      } else if (s.transport === "streamable-http") {
+        lines.push(`        transport: ${s.transport}`, `        url: ${yamlScalar(s.url!)}`);
         if (s.headers) lines.push("        headers:", ...yamlMap(s.headers, "          "));
       } else {
-        lines.push(`        command: ${yamlScalar(s.command!)}`);
+        lines.push(`        transport: ${s.transport}`, `        command: ${yamlScalar(s.command!)}`);
         if (s.args && s.args.length > 0) lines.push("        args:", ...s.args.map((a) => `          - ${yamlScalar(a)}`));
         if (s.env) lines.push("        env:", ...yamlMap(s.env, "          "));
       }
-    }
+    });
   }
   return `${lines.join("\n")}\n`;
 }

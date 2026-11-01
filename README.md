@@ -35,6 +35,7 @@ instructions, token accounting and an environment check. The work runs on DeepSe
 - [Fallback for Codex agents](#fallback-for-codex-agents)
 - [Providers: InferX, DeepSeek, custom](#providers-inferx-deepseek-custom)
 - [Models, MCP and permissions](#models-mcp-and-permissions)
+- [Restricting MCP tools](#restricting-mcp-tools)
 - [Sessions, skills and AGENTS.md](#sessions-skills-and-agentsmd)
 - [Telemetry and secrets](#telemetry-and-secrets)
 - [Troubleshooting](#troubleshooting)
@@ -205,7 +206,7 @@ Pick **DeepSeek Harness (local)** as the agent's adapter, or set it through the 
 | `model` | `deepseek-flash` | `deepseek-flash`, `deepseek-v4-pro`, or aliases `flash` / `pro`. Non-DeepSeek ids fall back to the default. |
 | `permissionMode` | `workspace-write` | `workspace-write`, `read-only` or `danger-full-access`, set as `DSH_PERMISSION_MODE`. Approval requests are always rejected. |
 | `addDirs` | none | Not supported by dsh 0.2.x, which has one writable root per session; listed paths only produce a warning. |
-| `mcpServers` | none | JSON object `name → {transport, url, headers, command, args, env}`. |
+| `mcpServers` | none | JSON object `name → {transport, url, headers, command, args, env, enabledTools, disabledTools}`. See [Restricting MCP tools](#restricting-mcp-tools). |
 | `instructionsFilePath` | managed by Paperclip | Copied to `$DSH_HOME/AGENTS.md` before each run. |
 | `cwd` | Paperclip workspace | Fallback working directory. |
 | `env` | none | Environment for dsh, including secret bindings. Set it with Paperclip's environment editor. |
@@ -357,6 +358,54 @@ that policy. dsh 0.2.x has a single writable root per session (the workspace) an
 an agent that must write outside its workspace, e.g. to a worktree's shared `.git`, needs
 `danger-full-access`.
 
+## Restricting MCP tools
+
+dsh's MCP client mounts every tool a server offers and has no allowlist (Codex's `enabled_tools`
+equivalent). To hide tools, e.g. the paid ones on OpenSEO, give the server `enabledTools` (keep only
+these) and/or `disabledTools` (remove these after the allowlist):
+
+```json
+{
+  "mcpServers": {
+    "openseo": {
+      "url": "https://app.openseo.so/mcp",
+      "headers": { "Authorization": "Bearer ${OPENSEO_API_KEY}" },
+      "enabledTools": ["whoami", "list_projects", "get_project_context"]
+    }
+  }
+}
+```
+
+`enabled_tools` / `disabled_tools` are accepted too, so a Codex list can be pasted as is. A server
+with a filter is mounted as a **stdio relay** instead of a direct connection:
+
+```
+dsh mcp-client --stdio--> paperclip-dsh-mcp-filter --streamable-http--> upstream server
+```
+
+The relay (`dist/mcp-filter/cli.js`, bin `paperclip-dsh-mcp-filter`) connects to the upstream as an MCP
+client, answers `tools/list` with the filtered list (fetched live, so upstream changes show up),
+passes the server `instructions` through, and answers `tools/call` for any other tool with an
+`isError` result **without contacting the upstream**. The model neither sees nor can call the hidden
+tools. Tool names stay `mcp__<serverName>__<tool>`.
+
+- **Secrets.** Header values (with their `${NAME}` references) are handed to the relay as env vars of
+  the stdio server, not argv or the patch file. dsh strips `KEY`/`TOKEN`/`SECRET`-style names from the
+  ambient env it gives a stdio child, but not from the server's own `env`, so the key reaches the
+  relay. The relay refuses to start if a referenced variable is unset.
+- **Empty list.** `enabledTools: []` exposes nothing. Omit the key for no restriction.
+- **stdio upstreams.** Filtering is only implemented for `streamable-http` servers. A stdio server with
+  `enabledTools`/`disabledTools` is skipped with a warning rather than mounted unfiltered.
+- **Scope.** Only tools are relayed; the upstream's resources and prompts are not exposed through a
+  filtered server.
+
+The relay also runs standalone:
+
+```
+paperclip-dsh-mcp-filter --url https://app.openseo.so/mcp --bearer-env OPENSEO_API_KEY \
+  --enable whoami,list_projects [--disable tool] [--header-env Name=ENV_VAR] [--enable-none]
+```
+
 ## Sessions, skills and AGENTS.md
 
 **Per-agent `DSH_HOME`.** Every agent gets its own home (default `~/.paperclip-dsh/agents/<agentId>`).
@@ -457,6 +506,7 @@ src/
   index.ts             createServerAdapter() and the agent configuration doc
   constants.ts         adapter id, model catalog, defaults
   ui-parser.ts         zero-import transcript parser served to the Paperclip UI
+  mcp-filter/          tool-filtering MCP relay (bin paperclip-dsh-mcp-filter)
   server/
     execute.ts         one heartbeat run
     stream.ts          NDJSON event parser and usage math

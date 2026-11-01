@@ -108,3 +108,70 @@ describe("normalizeMcpServers", () => {
     expect(normalizeMcpServers("{oops").warnings[0]).toMatch(/not valid JSON/);
   });
 });
+
+describe("MCP tool filtering", () => {
+  const relay = { command: "/usr/bin/node", script: "/opt/adapter/dist/mcp-filter/cli.js" };
+  const openseo = {
+    url: "https://app.openseo.so/mcp",
+    headers: { Authorization: "Bearer ${OPENSEO_API_KEY}" },
+    enabledTools: ["whoami", "list_projects"],
+  };
+
+  it("accepts enabledTools / enabled_tools and disabledTools, as arrays or strings", () => {
+    const { servers, warnings } = normalizeMcpServers({
+      a: { ...openseo, enabledTools: undefined, enabled_tools: "whoami\nlist_projects, whoami" },
+      b: { url: "https://b.test/mcp", disabledTools: ["x"] },
+      c: { url: "https://c.test/mcp" },
+    });
+    expect(warnings).toEqual([]);
+    expect(servers.map((s) => [s.name, s.enabledTools, s.disabledTools])).toEqual([
+      ["a", ["whoami", "list_projects"], undefined],
+      ["b", undefined, ["x"]],
+      ["c", undefined, undefined],
+    ]);
+  });
+
+  it("mounts a filtered server through the relay, keeping the key in env only", () => {
+    const { servers } = normalizeMcpServers({ openseo });
+    const yaml = buildDshPatch({ model: "deepseek-flash", disableTelemetry: true, mcpServers: servers, relay });
+    expect(yaml).toContain(
+      [
+        '        serverName: "openseo"',
+        "        transport: stdio",
+        '        command: "/usr/bin/node"',
+        "        args:",
+        '          - "/opt/adapter/dist/mcp-filter/cli.js"',
+        '          - "--url"',
+        '          - "https://app.openseo.so/mcp"',
+        '          - "--header-env"',
+        '          - "Authorization=PAPERCLIP_MCP_RELAY_0_H0"',
+        '          - "--enable"',
+        '          - "whoami,list_projects"',
+        "        env:",
+        '          "PAPERCLIP_MCP_RELAY_0_H0": !!js "`Bearer ${process.env.OPENSEO_API_KEY ?? \\"\\"}`"',
+      ].join("\n"),
+    );
+    expect(yaml).not.toContain("streamable-http");
+    expect(yaml).not.toContain("headers:");
+    expect(collectEnvRefs(servers)).toEqual(["OPENSEO_API_KEY"]);
+  });
+
+  it("leaves unfiltered servers on the direct transport", () => {
+    const { servers } = normalizeMcpServers({ plain: { url: "https://p.test/mcp" } });
+    const yaml = buildDshPatch({ model: "deepseek-flash", disableTelemetry: true, mcpServers: servers, relay });
+    expect(yaml).toContain("transport: streamable-http");
+    expect(yaml).not.toContain("cli.js");
+  });
+
+  it("renders an empty allowlist as --enable-none and disabledTools as --disable", () => {
+    const { servers } = normalizeMcpServers({ a: { url: "https://a.test/mcp", enabledTools: [], disabledTools: ["x", "y"] } });
+    const yaml = buildDshPatch({ model: "deepseek-flash", disableTelemetry: true, mcpServers: servers, relay });
+    expect(yaml).toContain('          - "--enable-none"\n          - "--disable"\n          - "x,y"');
+  });
+
+  it("refuses to mount a stdio server with a tool filter instead of failing open", () => {
+    const { servers, warnings } = normalizeMcpServers({ fs: { command: "npx", enabledTools: ["read"] } });
+    expect(servers).toEqual([]);
+    expect(warnings[0]).toContain("only supported for streamable-http");
+  });
+});

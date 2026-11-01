@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.4] - 2026-11-02
+
+### Added
+
+- MCP tool filtering. A streamable-http server in `mcpServers` accepts `enabledTools` and
+  `disabledTools`; the adapter then mounts it through the new `paperclip-dsh-mcp-filter` stdio relay,
+  which hides the other tools from `tools/list` and refuses their `tools/call` locally. See
+  "Restricting MCP tools" in the README.
+
 ## [0.1.3] - 2026-11-01
 
 ### Fixed

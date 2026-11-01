@@ -58,6 +58,9 @@ export interface DshPatchOptions {
 }
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** What Paperclip's API/config layer writes in place of a value stored under a sensitive-looking key. */
+const REDACTED_PLACEHOLDER = "***REDACTED***";
 const ENV_REF_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
 function asRecordOfStrings(value: unknown, field: string, server: string, warnings: string[]): Record<string, string> | undefined {
@@ -172,8 +175,25 @@ export function normalizeMcpServers(value: unknown): { servers: McpServerSpec[];
     if (disabledTools && disabledTools.length > 0) spec.disabledTools = disabledTools;
     if (transport === "streamable-http") {
       spec.url = url;
-      const headers = asRecordOfStrings(rec.headers, "headers", name, warnings);
-      if (headers && Object.keys(headers).length > 0) spec.headers = headers;
+      const headers = asRecordOfStrings(rec.headers, "headers", name, warnings) ?? {};
+      const bearerEnv = [rec.bearerTokenEnv, rec.bearerTokenEnvVar, rec.bearer_token_env_var].find((v) => typeof v === "string" && v.trim());
+      if (typeof bearerEnv === "string") {
+        if (ENV_NAME_RE.test(bearerEnv.trim())) {
+          if (!Object.keys(headers).some((h) => h.toLowerCase() === "authorization")) headers["Authorization"] = `Bearer \${${bearerEnv.trim()}}`;
+        } else {
+          warnings.push(`MCP server "${name}": bearerTokenEnv "${bearerEnv}" is not an environment variable name; skipped.`);
+          continue;
+        }
+      }
+      const masked = Object.keys(headers).filter((h) => headers[h]!.includes(REDACTED_PLACEHOLDER));
+      if (masked.length > 0) {
+        // Paperclip masks values under keys like "Authorization"; sending the placeholder only yields a 401.
+        warnings.push(
+          `MCP server "${name}": header ${masked.join(", ")} holds Paperclip's redaction placeholder instead of a value; use "bearerTokenEnv": "<ENV_VAR>" (the key stays in the agent's env). Server skipped.`,
+        );
+        continue;
+      }
+      if (Object.keys(headers).length > 0) spec.headers = headers;
     } else {
       spec.command = command;
       if (Array.isArray(rec.args)) spec.args = rec.args.map((a) => String(a));

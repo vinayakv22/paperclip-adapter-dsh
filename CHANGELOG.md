@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.6] - 2026-11-02
+
+### Added
+
+- `bearerTokenEnv` (alias `bearer_token_env_var`) on MCP servers: the `Authorization: Bearer` header is built
+  from an env var name at run time.
+
+### Fixed
+
+- A `headers.Authorization` value saved through Paperclip came back as the literal `***REDACTED***`
+  (Paperclip masks values under credential-looking keys), so MCP servers answered 401. Such a header now
+  skips the server with a warning that points to `bearerTokenEnv`.
+- The relay reports the HTTP status and header length (never values) when its upstream connection fails.
+
 ## [0.1.5] - 2026-11-02
 
 ### Fixed

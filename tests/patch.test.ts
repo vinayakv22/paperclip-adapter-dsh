@@ -199,3 +199,33 @@ describe("MCP tool filtering", () => {
     expect(warnings[0]).toContain("only supported for streamable-http");
   });
 });
+
+describe("MCP bearerTokenEnv", () => {
+  it("builds the Authorization header from an env var name, so no credential header is stored in the config", () => {
+    const { servers, warnings } = normalizeMcpServers({ openseo: { url: "https://app.openseo.so/mcp", bearerTokenEnv: "OPENSEO_API_KEY", enabled_tools: ["whoami"] } });
+    expect(warnings).toEqual([]);
+    expect(servers[0]!.headers).toEqual({ Authorization: "Bearer ${OPENSEO_API_KEY}" });
+    expect(collectEnvRefs(servers)).toEqual(["OPENSEO_API_KEY"]);
+  });
+
+  it("accepts the Codex spelling bearer_token_env_var and keeps an explicit Authorization header", () => {
+    const a = normalizeMcpServers({ a: { url: "https://a.test/mcp", bearer_token_env_var: "A_KEY" } });
+    expect(a.servers[0]!.headers).toEqual({ Authorization: "Bearer ${A_KEY}" });
+    const b = normalizeMcpServers({ b: { url: "https://b.test/mcp", bearerTokenEnv: "B_KEY", headers: { authorization: "Bearer ${OTHER}" } } });
+    expect(b.servers[0]!.headers).toEqual({ authorization: "Bearer ${OTHER}" });
+  });
+
+  it("rejects a bad env var name", () => {
+    const { servers, warnings } = normalizeMcpServers({ a: { url: "https://a.test/mcp", bearerTokenEnv: "not a name" } });
+    expect(servers).toEqual([]);
+    expect(warnings[0]).toContain("not an environment variable name");
+  });
+
+  it("skips a server whose header is Paperclip's redaction placeholder instead of sending it", () => {
+    const { servers, warnings } = normalizeMcpServers({ openseo: { url: "https://app.openseo.so/mcp", headers: { Authorization: "***REDACTED***" } } });
+    expect(servers).toEqual([]);
+    expect(warnings[0]).toContain("redaction placeholder");
+    expect(warnings[0]).toContain("bearerTokenEnv");
+  });
+});
+

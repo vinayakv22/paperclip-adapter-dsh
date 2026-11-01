@@ -189,7 +189,7 @@ Pick **DeepSeek Harness (local)** as the agent's adapter, or set it through the 
       "openseo": {
         "transport": "streamable-http",
         "url": "https://app.openseo.so/mcp",
-        "headers": { "Authorization": "Bearer ${OPENSEO_API_KEY}" }
+        "bearerTokenEnv": "OPENSEO_API_KEY"
       }
     },
     "timeoutSec": 3600,
@@ -206,7 +206,7 @@ Pick **DeepSeek Harness (local)** as the agent's adapter, or set it through the 
 | `model` | `deepseek-flash` | `deepseek-flash`, `deepseek-v4-pro`, or aliases `flash` / `pro`. Non-DeepSeek ids fall back to the default. |
 | `permissionMode` | `workspace-write` | `workspace-write`, `read-only` or `danger-full-access`, set as `DSH_PERMISSION_MODE`. Approval requests are always rejected. |
 | `addDirs` | none | Not supported by dsh 0.2.x, which has one writable root per session; listed paths only produce a warning. |
-| `mcpServers` | none | JSON object `name → {transport, url, headers, command, args, env, enabledTools, disabledTools}`. See [Restricting MCP tools](#restricting-mcp-tools). |
+| `mcpServers` | none | JSON object `name → {transport, url, bearerTokenEnv, headers, command, args, env, enabledTools, disabledTools}`. See [Restricting MCP tools](#restricting-mcp-tools). |
 | `instructionsFilePath` | managed by Paperclip | Copied to `$DSH_HOME/AGENTS.md` before each run. |
 | `cwd` | Paperclip workspace | Fallback working directory. |
 | `env` | none | Environment for dsh, including secret bindings. Set it with Paperclip's environment editor. |
@@ -359,6 +359,11 @@ against its environment, so the generated file never contains the secret:
           "Authorization": !!js "`Bearer ${process.env.OPENSEO_API_KEY ?? \"\"}`"
 ```
 
+**Bearer tokens.** Use `"bearerTokenEnv": "OPENSEO_API_KEY"` (Codex's `bearer_token_env_var` spelling works too) rather than a
+`headers.Authorization` value. Paperclip masks values stored under credential-looking keys in `adapterConfig` and writes
+`***REDACTED***` in their place, which the server then rejects with an empty-bodied 401. The adapter builds the header from the
+variable name at run time and skips a server whose header is the placeholder, with a warning.
+
 **Permissions.** `permissionMode` is exported as `DSH_PERMISSION_MODE`, which the headless
 profile's `sandbox-policy` row reads (`read-only`, `workspace-write` or `danger-full-access`). The
 mode governs file writes only: shell commands keep network access. No one is present to approve tool
@@ -379,7 +384,7 @@ these) and/or `disabledTools` (remove these after the allowlist):
   "mcpServers": {
     "openseo": {
       "url": "https://app.openseo.so/mcp",
-      "headers": { "Authorization": "Bearer ${OPENSEO_API_KEY}" },
+      "bearerTokenEnv": "OPENSEO_API_KEY",
       "enabledTools": ["whoami", "list_projects", "get_project_context"]
     }
   }

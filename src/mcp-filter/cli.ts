@@ -8,7 +8,14 @@ import { createHttpUpstream, createRelay } from "./relay.js";
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const relay = createRelay({ upstream: createHttpUpstream(args.url, args.headers), policy: args.policy });
-  await relay.start(new StdioServerTransport());
+  try {
+    await relay.start(new StdioServerTransport());
+  } catch (err) {
+    // Lengths only, never values: tells an empty credential from a rejected one.
+    const sizes = Object.entries(args.headers).map(([name, value]) => `${name}=${value.length} chars`);
+    if (sizes.length > 0) process.stderr.write(`paperclip-dsh-mcp-filter: headers sent: ${sizes.join(", ")}\n`);
+    throw err;
+  }
   const stop = () => void relay.close().finally(() => process.exit(0));
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);

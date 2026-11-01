@@ -1,0 +1,14 @@
+{"type":"session","sessionId":"ses_01","cwd":"/work/repo"}
+{"type":"status","phase":"turn_start"}
+{"type":"status","phase":"step_start"}
+{"type":"thinking","text":"Need to look at the issue first."}
+{"type":"tool_call","callId":"c1","tool":"shell","input":{"command":"curl -s $PAPERCLIP_API_URL/api/agents/me"}}
+{"type":"tool_result","callId":"c1","status":"completed","result":"{\"id\":\"agent-1\"}"}
+{"type":"status","phase":"step_end","usage":{"inputTokens":1200,"outputTokens":80,"cacheReadTokens":3000,"cacheWriteTokens":500,"reasoningTokens":40,"totalTokens":4780}}
+{"type":"status","phase":"step_start"}
+{"type":"tool_call","callId":"c2","tool":"read_file","input":{"path":"README.md"}}
+{"type":"tool_result","callId":"c2","status":"error","result":null,"error":"ENOENT: no such file"}
+{"type":"text","text":"Working on it."}
+{"type":"status","phase":"step_end","usage":{"inputTokens":300,"outputTokens":120,"cacheReadTokens":4100}}
+{"type":"status","phase":"turn_end","usage":{"inputTokens":1500,"outputTokens":200,"cacheReadTokens":7100,"cacheWriteTokens":500}}
+{"type":"final","sessionId":"ses_01","reason":{"kind":"completed"},"text":"Posted the status comment on SEO-12."}

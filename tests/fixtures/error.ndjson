@@ -1,0 +1,3 @@
+{"type":"session","sessionId":"ses_02","cwd":"/work/repo"}
+{"type":"status","phase":"turn_start"}
+{"type":"error","message":"DeepSeek API error 401: invalid api key"}

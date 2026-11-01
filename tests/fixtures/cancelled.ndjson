@@ -1,0 +1,4 @@
+{"type":"session","sessionId":"ses_03","cwd":"/work/repo"}
+{"type":"status","phase":"turn_start"}
+{"type":"status","phase":"turn_end","usage":{"inputTokens":10,"outputTokens":5}}
+{"type":"final","sessionId":"ses_03","reason":{"kind":"max_steps"},"text":""}

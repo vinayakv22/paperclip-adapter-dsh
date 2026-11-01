@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.8] - 2026-11-02
+
+### Added
+
+- Automatic fallback from InferX to DeepSeek's API. With `provider: auto`, a run that fails on InferX
+  for provider reasons is re-run once on `deepseek-official` / `deepseek-flash`. Provider reasons are
+  capacity 429s after the retry policy, 5xx, 401/403, a connection failure, or exhausted quota.
+  - The adapter resumes the failed dsh session (sessions do not depend on the provider), so finished
+    steps are not repeated. Without a session, the run starts fresh with the same handoff.
+  - The run log says `[dsh] InferX failed (<reason>); falling back to deepseek-official`.
+  - The result reports `deepseek` as provider and biller; `resultJson.fallback` holds the details.
+- Cool-down: after an InferX failure, runs on the host go straight to `deepseek-official` for
+  `fallbackCooldownSec` (default 900). The state is in `~/.paperclip-dsh/provider-cooldown.json`.
+- `fallbackProvider` (`deepseek-official` | `none`) and `fallbackCooldownSec` config keys. The
+  environment test shows the fallback route and any active cool-down.
+- Explicit `llm-deepseek` catalog row: under `auto`, DeepSeek's API uses InferX Flash's
+  262,144-token context window instead of dsh's 1,048,576, so compaction triggers the same on either
+  route. A configured `contextWindow` / `maxTokens` (floor 8,192) also applies to `deepseek-official`.
+
 ## [0.1.7] - 2026-11-02
 
 ### Fixed
@@ -136,6 +155,7 @@ All notable changes to this project are documented here. The format follows
 - Zero-import UI parser for readable run transcripts (thinking, tool calls, results, usage).
 - Environment test: dsh version, Node >= 24.9, DeepSeek key presence, writable `DSH_HOME`.
 
+[0.1.8]: https://github.com/vinayakv22/paperclip-adapter-dsh/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/vinayakv22/paperclip-adapter-dsh/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/vinayakv22/paperclip-adapter-dsh/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/vinayakv22/paperclip-adapter-dsh/compare/v0.1.4...v0.1.5

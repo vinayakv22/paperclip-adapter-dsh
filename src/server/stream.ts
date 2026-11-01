@@ -37,6 +37,8 @@ export interface DshStreamSummary {
   toolErrors: number;
   steps: number;
   finalEvent: Record<string, unknown> | null;
+  /** `turn_end.reason.error` of the last errored turn, e.g. {code:"RATE_LIMIT", message:"429 …"}. */
+  providerError: { code: string | null; message: string } | null;
 }
 
 export function emptyUsage(): DshUsageCounters {
@@ -111,6 +113,7 @@ export function createDshStreamAccumulator() {
     toolErrors: 0,
     steps: 0,
     finalEvent: null,
+    providerError: null,
   };
   let lastText = "";
   let turnEndReason: string | null = null;
@@ -136,6 +139,14 @@ export function createDshStreamAccumulator() {
         } else if (event.phase === "turn_end") {
           if (event.usage && typeof event.usage === "object") addUsage(turnUsage, event.usage);
           turnEndReason = reasonKind(event.reason) ?? turnEndReason;
+          const err = (event.reason as { error?: unknown } | undefined)?.error;
+          if (err && typeof err === "object") {
+            const e = err as { code?: unknown; message?: unknown };
+            summary.providerError = {
+              code: typeof e.code === "string" && e.code ? e.code : null,
+              message: typeof e.message === "string" ? e.message : JSON.stringify(err),
+            };
+          }
         }
         break;
       }

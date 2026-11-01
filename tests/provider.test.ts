@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { INFERX_RETRY_POLICY, readRetryPolicy, resolveProvider } from "../src/server/provider.js";
+import { INFERX_RETRY_POLICY, readRetryPolicy, resolveFallback, resolveProvider } from "../src/server/provider.js";
 
 const withKeys = (...names: string[]) => (name: string) => names.includes(name);
 
@@ -104,5 +104,43 @@ describe("retry policy", () => {
     const base = { provider: "acme", baseUrl: "https://x.example/v1", apiKeyEnv: "ACME_KEY", model: "m1" };
     expect(resolveProvider(base, has).route?.retryPolicy).toBeNull();
     expect(resolveProvider({ ...base, providerRetry: { maxRetries: 8 } }, has).route?.retryPolicy).toEqual({ mode: "normal", maxRetries: 8 });
+  });
+});
+
+describe("deepseek-official catalog and InferX fallback", () => {
+  const keys = (...names: string[]) => (n: string) => names.includes(n);
+  const flash = (r: { officialModels?: { id: string; contextWindow: number }[] | null }) => r.officialModels?.find((m) => m.id === "deepseek-flash");
+
+  it("auto keeps the 262,144 window on DeepSeek's API; explicit official keeps dsh's catalog", () => {
+    const auto = resolveProvider({ model: "deepseek-flash" }, keys("DEEPSEEK_API_KEY"));
+    expect(auto.provider).toBe("deepseek-official");
+    expect(flash(auto)?.contextWindow).toBe(262_144);
+    expect(auto.officialModels?.find((m) => m.id === "deepseek-v4-pro")?.contextWindow).toBe(1_048_576);
+    expect(resolveProvider({ provider: "deepseek-official", model: "deepseek-flash" }, keys()).officialModels).toBeNull();
+    expect(flash(resolveProvider({ provider: "deepseek-official", contextWindow: 200000 }, keys()))?.contextWindow).toBe(200_000);
+  });
+
+  it("auto skips InferX during a cool-down only when DeepSeek's key is there", () => {
+    const cooldown = { until: "2026-11-02T00:15:00Z", reason: "RATE_LIMIT: 429" };
+    const cooled = resolveProvider({ model: "flash" }, keys("DEEPSEEK_INFERX_API_KEY", "DEEPSEEK_API_KEY"), { cooldown });
+    expect(cooled).toMatchObject({ provider: "deepseek-official", model: "deepseek-flash" });
+    expect(cooled.reason).toContain("cooling down");
+    expect(flash(cooled)?.contextWindow).toBe(262_144);
+    expect(resolveProvider({ model: "flash" }, keys("DEEPSEEK_INFERX_API_KEY"), { cooldown }).provider).toBe("inferx");
+  });
+
+  it("resolveFallback: auto -> deepseek-flash with the same window, unless off or keyless", () => {
+    const both = keys("DEEPSEEK_INFERX_API_KEY", "DEEPSEEK_API_KEY");
+    const primary = resolveProvider({ model: "deepseek-flash", maxTokens: 1000 }, both);
+    const fb = resolveFallback({ model: "deepseek-flash", maxTokens: 1000 }, primary, both);
+    expect(fb).toMatchObject({ provider: "deepseek-official", model: "deepseek-flash" });
+    expect(flash(fb!)).toMatchObject({ contextWindow: 262_144, maxTokens: 8192 });
+    expect(resolveFallback({ fallbackProvider: "none" }, primary, both)).toBeNull();
+    expect(resolveFallback({}, primary, keys("DEEPSEEK_INFERX_API_KEY"))).toBeNull();
+    const explicit = resolveProvider({ provider: "inferx" }, both);
+    expect(resolveFallback({ provider: "inferx" }, explicit, both)).toBeNull();
+    expect(resolveFallback({ provider: "inferx", fallbackProvider: "deepseek-official" }, explicit, both)?.provider).toBe("deepseek-official");
+    const official = resolveProvider({ provider: "deepseek-official" }, both);
+    expect(resolveFallback({}, official, both)).toBeNull();
   });
 });

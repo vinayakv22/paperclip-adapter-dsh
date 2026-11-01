@@ -55,6 +55,27 @@ export function getConfigSchema(): AdapterConfigSchema {
         group: "Model",
       },
       {
+        key: "fallbackProvider",
+        label: "Fallback provider",
+        type: "combobox",
+        default: "",
+        options: [
+          { value: "", label: "Default (auto falls back to deepseek-official)" },
+          { value: "deepseek-official", label: "deepseek-official" },
+          { value: "none", label: "None: fail the run" },
+        ],
+        hint: "When InferX fails (capacity after retries, 5xx, auth, connection) the run is re-run once on DeepSeek's API (deepseek-flash, 262,144-token window), resuming the session. Needs DEEPSEEK_API_KEY.",
+        group: "Model",
+      },
+      {
+        key: "fallbackCooldownSec",
+        label: "Fallback cool-down (seconds)",
+        type: "number",
+        default: 900,
+        hint: "After an InferX failure, runs on this host go straight to DeepSeek's API for this long. 0 turns it off.",
+        group: "Model",
+      },
+      {
         key: "providerRetry",
         label: "Retry policy (JSON)",
         type: "textarea",

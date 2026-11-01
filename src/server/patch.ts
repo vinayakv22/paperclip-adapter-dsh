@@ -17,7 +17,7 @@
 
 import { fileURLToPath } from "node:url";
 import { DEEPSEEK_PROVIDER, MANAGED_MARKER } from "../constants.js";
-import type { ProviderRoute } from "./provider.js";
+import type { OfficialModelSpec, ProviderRoute } from "./provider.js";
 
 export type McpTransport = "stdio" | "streamable-http";
 
@@ -51,6 +51,8 @@ export interface DshPatchOptions {
   provider?: string;
   /** Extra llm-pi-ai route to declare (null/absent for deepseek-official). */
   route?: ProviderRoute | null;
+  /** deepseek-official catalog override (`llm-deepseek` models), e.g. a 262,144-token window. */
+  officialModels?: OfficialModelSpec[] | null;
   disableTelemetry: boolean;
   mcpServers?: McpServerSpec[];
   /** Override the relay launch command (tests). */
@@ -248,6 +250,25 @@ export function collectEnvRefs(servers: McpServerSpec[]): string[] {
   return [...names].sort();
 }
 
+/** `llm-deepseek` row replacing dsh's official model catalog (explicit context windows). */
+export function buildOfficialCatalogRows(models: OfficialModelSpec[]): string[] {
+  const lines = [
+    "",
+    "# DeepSeek's own API with an explicit catalog: dsh compacts against these context windows.",
+    "- id: llm-deepseek",
+    "  config:",
+    "    models:",
+  ];
+  for (const m of models) {
+    lines.push(`      - id: ${JSON.stringify(m.id)}`, `        name: ${JSON.stringify(m.name)}`, `        contextWindow: ${m.contextWindow}`);
+    if (m.maxTokens) lines.push(`        maxTokens: ${m.maxTokens}`);
+    if (m.inputModalities?.length) lines.push(`        inputModalities: [${m.inputModalities.map((x) => JSON.stringify(x)).join(", ")}]`);
+    if (m.systemPromptUpdate) lines.push(`        systemPromptUpdate: ${JSON.stringify(m.systemPromptUpdate)}`);
+    if (m.toolUpdate) lines.push(`        toolUpdate: ${JSON.stringify(m.toolUpdate)}`);
+  }
+  return lines;
+}
+
 /** `llm-pi-ai` row declaring one route. The key is referenced by env var name only. */
 export function buildProviderRows(route: ProviderRoute): string[] {
   const lines = [
@@ -318,6 +339,7 @@ export function buildDshPatch(options: DshPatchOptions): string {
     `    model: ${JSON.stringify(options.model)}`,
   ];
   if (options.route) lines.push(...buildProviderRows(options.route));
+  else if (options.officialModels?.length) lines.push(...buildOfficialCatalogRows(options.officialModels));
   lines.push(
     "",
     "# Unattended run: approval requests are rejected instead of waiting for a human.",

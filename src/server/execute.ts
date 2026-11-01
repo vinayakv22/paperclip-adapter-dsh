@@ -31,11 +31,12 @@ import {
 } from "@paperclipai/adapter-utils/server-utils";
 import { adapterExecutionTargetIsRemote, readAdapterExecutionTarget } from "@paperclipai/adapter-utils/execution-target";
 import { createProviderStoppedBoundary } from "@paperclipai/adapter-utils/provider-stopped-boundary";
-import { ADAPTER_TYPE } from "../constants.js";
+import { ADAPTER_TYPE, INFERX_PROVIDER } from "../constants.js";
 import { buildDshArgs, buildDshEnv, readDshConfig } from "./config.js";
 import { dshPaths, ensureDshHome, readSharedDeepseekEnv, resolveDshHome, sharedEnvFile, syncAgentsMd, writeIfChanged } from "./home.js";
 import { buildDshPatch, collectEnvRefs } from "./patch.js";
-import { resolveProvider } from "./provider.js";
+import { resolveFallback, resolveProvider, type ResolvedProvider } from "./provider.js";
+import { classifyProviderFailure, readCooldown, readCooldownSec, writeCooldown } from "./fallback.js";
 import { parseSessionParams, sessionResumeBlocker } from "./session.js";
 import { BASH_ENV_SCRIPT, planShellForward, readForwardEnv, renderSandboxNote } from "./shell-env.js";
 import { linkRuntimeSkills } from "./skills.js";
@@ -203,26 +204,38 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   }
   if (fromShared.length > 0) await note(`Using ${fromShared.sort().join(", ")} from ${sharedEnvFile()}.`);
 
-  const llm = resolveProvider(config, (name) => Boolean(nonEmpty(runtimeEnv[name])));
-  for (const w of llm.warnings) await warn(w);
-  await note(`Provider ${llm.provider}, model ${llm.model} (${llm.reason}).`);
-  if (!nonEmpty(runtimeEnv[llm.keyEnv])) {
-    await warn(
-      llm.route
-        ? `${llm.keyEnv} is not set in the run environment; requests to ${llm.provider} will fail with MISSING_CREDENTIAL.`
-        : `${llm.keyEnv} is not in the run environment; dsh will look in <cwd>/.env and $DSH_HOME/.env.`,
+  const hasKey = (name: string) => Boolean(nonEmpty(runtimeEnv[name]));
+  const fallbackWarnings: string[] = [];
+  const cooldownSec = readCooldownSec(config.fallbackCooldownSec, fallbackWarnings);
+  for (const w of fallbackWarnings) await warn(w);
+  const fallbackOff = /^(none|off)$/i.test(asString(config.fallbackProvider, "").trim());
+  const cooldown = cooldownSec > 0 && !fallbackOff ? await readCooldown(INFERX_PROVIDER).catch(() => null) : null;
+  let llm: ResolvedProvider = resolveProvider(config, hasKey, { cooldown });
+  const announce = async (l: ResolvedProvider) => {
+    for (const w of l.warnings) await warn(w);
+    await note(`Provider ${l.provider}, model ${l.model} (${l.reason}).`);
+    if (!nonEmpty(runtimeEnv[l.keyEnv])) {
+      await warn(
+        l.route
+          ? `${l.keyEnv} is not set in the run environment; requests to ${l.provider} will fail with MISSING_CREDENTIAL.`
+          : `${l.keyEnv} is not in the run environment; dsh will look in <cwd>/.env and $DSH_HOME/.env.`,
+      );
+    }
+  };
+  const writePatch = (l: ResolvedProvider) =>
+    writeIfChanged(
+      paths.patch,
+      buildDshPatch({
+        model: l.model,
+        provider: l.provider,
+        route: l.route,
+        officialModels: l.officialModels ?? null,
+        disableTelemetry: settings.disableTelemetry,
+        mcpServers: settings.mcpServers,
+      }),
     );
-  }
-  await writeIfChanged(
-    paths.patch,
-    buildDshPatch({
-      model: llm.model,
-      provider: llm.provider,
-      route: llm.route,
-      disableTelemetry: settings.disableTelemetry,
-      mcpServers: settings.mcpServers,
-    }),
-  );
+  await announce(llm);
+  await writePatch(llm);
   for (const name of collectEnvRefs(settings.mcpServers)) {
     if (!nonEmpty(runtimeEnv[name])) await warn(`MCP config references \${${name}} but it is not set in the run environment.`);
   }
@@ -316,9 +329,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const providerStop = createProviderStoppedBoundary(ctx.onProviderStopped);
   const resolvedCommand = await resolveCommandForLogs(settings.command, cwd, runtimeEnv).catch(() => settings.command);
 
-  const attempt = async (sessionId: string | null) => {
+  const attempt = async (sessionId: string | null, extraNote = "") => {
     await hydrateFreshSessionHandoff(ctx, { resumedSession: Boolean(sessionId) });
-    const { prompt, metrics } = buildPrompt(Boolean(sessionId));
+    const built = buildPrompt(Boolean(sessionId));
+    const prompt = extraNote ? joinPromptSections([extraNote, built.prompt]) : built.prompt;
+    const metrics = { ...built.metrics, promptChars: prompt.length };
     const args = buildDshArgs({
       patchFile: paths.patch,
       sessionId,
@@ -375,6 +390,64 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       run = await attempt(null);
     }
 
+    // InferX failed for provider reasons (capacity after retries, 5xx, auth, connection):
+    // run this heartbeat once more on DeepSeek's own API and cool InferX down for later runs.
+    let fallbackInfo: Record<string, unknown> | null = null;
+    const fallback = resolveFallback(config, llm, hasKey);
+    const firstReason = fallback
+      ? classifyProviderFailure({
+          success: !run.proc.timedOut && isDshSuccess(run.proc.exitCode, run.summary),
+          timedOut: run.proc.timedOut,
+          summary: run.summary,
+          stderr: run.proc.stderr,
+        })
+      : null;
+    if (fallback && firstReason) {
+      const failed = run;
+      const from = llm;
+      const label = from.provider === INFERX_PROVIDER ? "InferX" : from.provider;
+      await onLog("stdout", `[dsh] ${label} failed (${firstReason}); falling back to ${fallback.provider}\n`);
+      const cooled = cooldownSec > 0 ? await writeCooldown(from.provider, firstReason, cooldownSec).catch(() => null) : null;
+      if (cooled) await note(`${label} cool-down until ${cooled.until}: runs on this host use ${fallback.provider} until then.`);
+      llm = fallback;
+      await announce(llm);
+      await writePatch(llm);
+      // dsh sessions are provider-independent: resume the failed one so finished steps are not
+      // repeated; start fresh (same handoff) when it never got a session.
+      const failedSession = failed.summary.sessionId ?? (retriedFresh ? null : resumeId);
+      const continueNote = [
+        `Note: the previous model provider (${label}) failed during this heartbeat (${firstReason}).`,
+        `You are now on ${fallback.provider}. Continue the task from where it stopped; check what is already`,
+        "done (issue comments, workspace) before repeating any action.",
+      ].join(" ");
+      let resumedFailed = false;
+      if (failedSession) {
+        run = await attempt(failedSession, continueNote);
+        resumedFailed = true;
+        if (!run.proc.timedOut && isUnknownSessionError(run.proc.stdout, run.proc.stderr, run.summary)) {
+          await warn(`dsh session ${failedSession} could not be resumed on ${fallback.provider}; starting fresh.`);
+          run = await attempt(null);
+          resumedFailed = false;
+          retriedFresh = true;
+        } else retriedFresh = false;
+      } else {
+        run = await attempt(null);
+        retriedFresh = true;
+      }
+      fallbackInfo = {
+        from: from.provider,
+        to: fallback.provider,
+        reason: firstReason,
+        resumedSession: resumedFailed ? failedSession : null,
+        failedRun: {
+          steps: failed.summary.steps,
+          toolCalls: failed.summary.toolCalls,
+          usage: toPaperclipUsage(failed.summary.usage),
+        },
+        cooldownUntil: cooled?.until ?? null,
+      };
+    }
+
     const { proc, summary } = run;
     const sessionId = summary.sessionId ?? (retriedFresh ? null : resumeId);
     const sessionParams = sessionId ? { sessionId, cwd, dshHome, model: llm.model } : null;
@@ -421,6 +494,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         reasoningTokens: summary.usage.reasoningTokens,
         cacheWriteTokens: summary.usage.cacheWriteTokens,
         ...(summary.errors.length > 0 ? { errors: summary.errors } : {}),
+        ...(fallbackInfo ? { fallback: fallbackInfo } : {}),
       },
     };
   } finally {

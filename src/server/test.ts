@@ -17,9 +17,10 @@ import type {
   AdapterEnvironmentTestResult,
 } from "@paperclipai/adapter-utils";
 import { ensureCommandResolvable, ensurePathInEnv, parseObject } from "@paperclipai/adapter-utils/server-utils";
-import { ADAPTER_TYPE, DSH_MIN_NODE_VERSION } from "../constants.js";
+import { ADAPTER_TYPE, DEEPSEEK_KEY_ENV, DSH_MIN_NODE_VERSION, INFERX_PROVIDER } from "../constants.js";
 import { readDshConfig } from "./config.js";
-import { resolveProvider } from "./provider.js";
+import { resolveFallback, resolveProvider } from "./provider.js";
+import { readCooldown, readCooldownSec } from "./fallback.js";
 import { defaultDshHomesRoot, readSharedDeepseekEnv, resolveDshHome, sharedEnvFile } from "./home.js";
 
 const run = promisify(execFile);
@@ -145,6 +146,36 @@ export async function testEnvironment(ctx: AdapterEnvironmentTestContext): Promi
           }.`,
         },
   );
+
+  // 3b. fallback to DeepSeek's own API when InferX fails
+  if (llm.provider === INFERX_PROVIDER || llm.route) {
+    const fallback = resolveFallback(config, llm, (name) => keySourceOf(name) !== null);
+    const off = /^(none|off)$/i.test(typeof config.fallbackProvider === "string" ? config.fallbackProvider.trim() : "");
+    const cooldownSec = readCooldownSec(config.fallbackCooldownSec);
+    if (fallback) {
+      const window = fallback.officialModels?.find((m) => m.id === fallback.model)?.contextWindow;
+      checks.push({
+        code: "dsh_fallback",
+        level: "info",
+        message: `Fallback: ${fallback.provider}, model ${fallback.model}${window ? `, context window ${window}` : ""} when ${llm.provider} fails (capacity, 5xx, auth, connection); cool-down ${Math.round(cooldownSec / 60)} min.`,
+      });
+      const active = cooldownSec > 0 ? await readCooldown(llm.provider).catch(() => null) : null;
+      if (active) {
+        checks.push({
+          code: "dsh_fallback_cooldown",
+          level: "info",
+          message: `${llm.provider} is cooling down until ${active.until} after "${active.reason}"; runs use ${fallback.provider} until then.`,
+        });
+      }
+    } else if (!off && !(typeof config.provider === "string" && config.provider.trim() && config.provider.trim() !== "auto")) {
+      checks.push({
+        code: "dsh_fallback_unavailable",
+        level: "warn",
+        message: `No fallback: ${DEEPSEEK_KEY_ENV} is not configured, so a failing ${llm.provider} fails the run.`,
+        hint: `Put ${DEEPSEEK_KEY_ENV}=… in ${sharedEnvFile()} (mode 600).`,
+      });
+    }
+  }
 
   // 4. DSH_HOME root writable
   try {

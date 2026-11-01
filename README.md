@@ -267,12 +267,55 @@ both rows into the patch file from these keys:
 | `providerCompat` | none | pi-ai wire-compat switches, e.g. `{"thinkingFormat": "deepseek"}` |
 | `contextWindow` | InferX Flash: 262,144; others: dsh fallback 262,144 | The model's real window; dsh compacts the session before it fills |
 | `maxTokens` | unset (dsh default 32,768) | Output cap per request; values below 8,192 are raised to 8,192 |
+| `fallbackProvider` | `auto`: `deepseek-official`; others: none | Route a failed InferX run is re-run on, or `"none"` |
+| `fallbackCooldownSec` | `900` (15 min) | How long later runs skip InferX after it failed; `0` turns the cool-down off |
 
 **`auto`** uses InferX when `DEEPSEEK_INFERX_API_KEY` is in the run environment (an env binding or
 `~/.paperclip-dsh/.env`) and the model is a Flash model (`deepseek-flash`, `flash`, unset, or a Codex
 model left behind after a swap). Otherwise it uses `deepseek-official`, so DeepSeek's API stays the
 fallback: remove the InferX key, or set `provider: deepseek-official`, to switch back. `deepseek-v4-pro`
 always goes to DeepSeek's API.
+
+### Automatic fallback to DeepSeek's API
+
+With `provider: auto` (the default), a run that fails on InferX for provider reasons is re-run once
+on `deepseek-official`, as long as `DEEPSEEK_API_KEY` is available (env binding or
+`~/.paperclip-dsh/.env`). That lets agents run unattended through an InferX outage.
+
+What counts as an InferX failure: dsh error codes `RATE_LIMIT` (capacity 429s that outlast the retry
+policy), `SERVER` (5xx), `TRANSPORT` and `TIMEOUT` (connection), `INVALID_CREDENTIAL` /
+`MISSING_CREDENTIAL` (401/403), and `QUOTA_EXCEEDED`. Bare 429, 5xx, 401 and 403 text counts too. These
+never trigger it:
+
+- a task-level stop (`max_steps`, a cancelled turn)
+- Paperclip's own run timeout
+- a context-window error
+- a successful run
+
+What happens on fallback:
+
+1. The run log gets `[dsh] InferX failed (<reason>); falling back to deepseek-official`.
+2. The patch is rewritten for `deepseek-official` / `deepseek-flash`. It carries an explicit
+   `llm-deepseek` catalog with `contextWindow: 262144`, so compaction triggers exactly as on InferX.
+   The `maxTokens` floor and the lean prompt apply unchanged.
+3. dsh sessions do not depend on the provider, so the adapter **resumes the failed InferX session**
+   with a one-line note to continue where it stopped. Steps that already ran are not repeated. When
+   InferX failed before a session existed, the run starts fresh with the same handoff.
+4. The result reports `provider` / `biller` `deepseek` and model `deepseek-flash`. `resultJson.fallback`
+   records the reason, the resumed session, and the failed InferX attempt's steps and usage.
+5. A cool-down is written to `~/.paperclip-dsh/provider-cooldown.json` (mode 600, shared by every
+   dsh_local agent on the host): `{"inferx": {"until": …, "reason": …, "at": …}}`. Until it expires,
+   `auto` goes straight to `deepseek-official` (the log says `auto: InferX is cooling down until …`).
+   After that it tries InferX again. Delete the file to retry InferX at once.
+
+`auto` uses the same 262,144-token window on DeepSeek's API whenever it lands there, whether through
+the fallback, the cool-down, or a missing InferX key. An explicit `provider: deepseek-official` keeps
+dsh's own catalog (1,048,576) unless `contextWindow` is set.
+
+Set `fallbackProvider: "none"` to fail InferX runs instead. Set
+`fallbackProvider: "deepseek-official"` to give an explicit `provider: inferx` (or a custom route)
+the same fallback. The environment test shows the fallback route and window, and any active
+cool-down.
 
 For InferX the generated rows look like this:
 
@@ -492,6 +535,7 @@ the workspace persists between commands.
 | `node … is older than 24.9.0` | The `node` on the Paperclip user's `PATH` is too old for dsh. Upgrade Node or put a newer one first on `PATH`. |
 | `authentication_required` / DeepSeek 401 | The key for the chosen provider (`DEEPSEEK_INFERX_API_KEY` or `DEEPSEEK_API_KEY`) is missing or wrong. Check the secret binding or `~/.paperclip-dsh/.env` (mode 600). |
 | `MISSING_CREDENTIAL` naming a route | The route's `apiKeyEnv` variable is not set in the run environment. |
+| Runs use `deepseek-official` although InferX is configured | Look for `[dsh] InferX failed (…)` or `auto: InferX is cooling down until …` in the run log. The cool-down lasts `fallbackCooldownSec` (15 min); delete `~/.paperclip-dsh/provider-cooldown.json` to retry InferX now. |
 | Run log shows the wrong provider | Look for `[paperclip] Provider …, model … (auto: …)`: it says why `auto` chose it. Set `provider` explicitly to override. |
 | `rate_limited` / `insufficient_balance` | DeepSeek returned 429 / 402. Wait, or top up the account. |
 | `Not resuming dsh session …` in the log | Expected after a workspace or `DSH_HOME` change, or after a swap from another adapter. |

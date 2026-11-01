@@ -71,6 +71,28 @@ if (mode === "error") {
   emit({ type: "error", message: "DeepSeek API error 429: rate limit reached" });
   process.exit(1);
 }
+// inferx-down: the InferX route is out of capacity (dsh 0.2.1 shape after its retries); every
+// other route works. inferx-unreachable: same, as a connection failure.
+const patchAt = args.indexOf("--patch");
+const patchText = patchAt >= 0 ? fs.readFileSync(args[patchAt + 1], "utf8") : "";
+if ((mode === "inferx-down" || mode === "inferx-unreachable") && patchText.includes('provider: "inferx"')) {
+  const error =
+    mode === "inferx-down"
+      ? { message: "429 service failure: endpoint deepseek-v4.1-flash-1017-basic all replicas at capacity", code: "RATE_LIMIT" }
+      : { message: "Connection error.", code: "TRANSPORT" };
+  emit({ type: "status", phase: "step_start", turn: 1, step: 1 });
+  emit({ type: "status", phase: "step_end", turn: 1, step: 1, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } });
+  emit({ type: "status", phase: "turn_end", turn: 1, reason: { kind: "error", error } });
+  emit({ type: "final", text: "" });
+  process.stderr.write(`dsh: ${error.code}: ${error.message}\n`);
+  process.exit(1);
+}
+if (mode === "max-steps") {
+  emit({ type: "status", phase: "step_end", usage: { inputTokens: 10, outputTokens: 2 } });
+  emit({ type: "status", phase: "turn_end", turn: 1, reason: { kind: "max_steps" } });
+  emit({ type: "final", text: "" });
+  process.exit(1);
+}
 emit({ type: "status", phase: "step_start" });
 emit({ type: "text", text: "Done." });
 emit({ type: "status", phase: "step_end", usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 50, cacheWriteTokens: 10 } });

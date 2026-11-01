@@ -38,6 +38,11 @@ Provider fields:
 - baseUrl (string): OpenAI-compatible base URL (inferx default https://model.inferx.net/endpoints/v1; required for custom).
 - apiKeyEnv (string): env var holding the key (inferx default DEEPSEEK_INFERX_API_KEY; required for custom).
 - providerApi (string): openai-completions (default) | openai-responses | anthropic-messages (custom routes).
+- fallbackProvider (string): "deepseek-official" (default for provider auto) | "none". A run that fails on InferX for
+  provider reasons (capacity 429 after retries, 5xx, auth, connection) is re-run once on deepseek-official /
+  deepseek-flash with contextWindow 262144, resuming the failed dsh session.
+- fallbackCooldownSec (number, default 900): later runs skip InferX this long after it failed (state in
+  ~/.paperclip-dsh/provider-cooldown.json); 0 disables the cool-down.
 - providerRetry (JSON object or "default"): dsh retry policy for the route ({mode, maxRetries, retryableCodes,
   backoff: {initialDelayMs, maxDelayMs, jitterRatio}}). InferX defaults to 12 retries, 2 s doubling to 30 s.
 - providerCompat (JSON object): dsh pi-ai compat switches, e.g. {"thinkingFormat":"deepseek"}.

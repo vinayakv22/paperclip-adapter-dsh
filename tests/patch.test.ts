@@ -100,6 +100,30 @@ describe("provider retry policy rows", () => {
   });
 });
 
+describe("deepseek-official catalog row", () => {
+  it("replaces dsh's catalog with explicit windows on DeepSeek's API, and only when asked", () => {
+    const llm = resolveProvider({ model: "deepseek-flash" }, (n) => n === "DEEPSEEK_API_KEY");
+    const yaml = buildDshPatch({ model: llm.model, provider: llm.provider, route: llm.route, officialModels: llm.officialModels, disableTelemetry: true });
+    expect(yaml).toContain(
+      [
+        "- id: llm-deepseek",
+        "  config:",
+        "    models:",
+        '      - id: "deepseek-flash"',
+        '        name: "DeepSeek-V4.1-Flash"',
+        "        contextWindow: 262144",
+        '        inputModalities: ["text", "image"]',
+        '        systemPromptUpdate: "in-history"',
+        '        toolUpdate: "addition-only"',
+        '      - id: "deepseek-v4-pro"',
+        '        name: "DeepSeek-V4-Pro"',
+        "        contextWindow: 1048576",
+      ].join("\n"),
+    );
+    expect(buildDshPatch({ model: "deepseek-flash", disableTelemetry: true })).not.toContain("llm-deepseek");
+  });
+});
+
 describe("yamlScalar", () => {
   it("quotes plain strings as JSON (valid YAML double-quoted scalars)", () => {
     expect(yamlScalar('a "quoted": value # not a comment')).toBe('"a \\"quoted\\": value # not a comment"');

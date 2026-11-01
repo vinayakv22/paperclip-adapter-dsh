@@ -8,7 +8,7 @@ import { execute } from "../src/server/execute.js";
 
 const FAKE_DSH = fileURLToPath(new URL("./fixtures/fake-dsh.mjs", import.meta.url));
 const tmp: string[] = [];
-const savedEnv = { HOME: process.env.HOME, DEEPSEEK_INFERX_API_KEY: process.env.DEEPSEEK_INFERX_API_KEY };
+const savedEnv = { HOME: process.env.HOME, DEEPSEEK_INFERX_API_KEY: process.env.DEEPSEEK_INFERX_API_KEY, DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY };
 afterEach(async () => {
   for (const [k, v] of Object.entries(savedEnv)) {
     if (v === undefined) delete process.env[k];
@@ -25,6 +25,7 @@ async function setup(extraConfig: Record<string, unknown> = {}, sessionParams: R
   await fs.mkdir(userHome, { recursive: true });
   process.env.HOME = userHome;
   delete process.env.DEEPSEEK_INFERX_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
   const cwd = path.join(root, "workspace");
   const home = path.join(root, "home");
   const record = path.join(root, "calls.ndjson");
@@ -257,6 +258,107 @@ describe("execute (fake dsh)", () => {
     expect(patch).not.toContain("ix-test-not-real");
     expect(s.logs.join("")).toMatch(/Using DEEPSEEK_INFERX_API_KEY from .*\.paperclip-dsh\/\.env/);
     expect(s.logs.join("")).not.toContain("ix-test-not-real");
+  });
+
+  describe("InferX fallback", () => {
+    async function withInferx(extra: Record<string, unknown> = {}) {
+      const s = await setup({ model: "deepseek-flash", mcpServers: undefined, addDirs: undefined, ...extra });
+      const sharedDir = path.join(s.userHome, ".paperclip-dsh");
+      await fs.mkdir(sharedDir, { recursive: true });
+      await fs.writeFile(path.join(sharedDir, ".env"), "DEEPSEEK_INFERX_API_KEY=ix-test-not-real\n", { mode: 0o600 });
+      return { ...s, cooldownFile: path.join(sharedDir, "provider-cooldown.json") };
+    }
+    const mode = (ctx: AdapterExecutionContext, m: string) => {
+      (ctx.config as { env: Record<string, string> }).env.FAKE_DSH_MODE = m;
+    };
+
+    it("re-runs a capacity-failed InferX heartbeat on deepseek-official, resuming its session", async () => {
+      const s = await withInferx();
+      mode(s.ctx, "inferx-down");
+      const result = await execute(s.ctx);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.errorMessage).toBeNull();
+      expect(result).toMatchObject({ provider: "deepseek", biller: "deepseek", model: "deepseek-flash" });
+      expect(result.sessionParams).toMatchObject({ sessionId: "ses_fresh", model: "deepseek-flash" });
+      expect(result.resultJson).toMatchObject({
+        fallback: { from: "inferx", to: "deepseek-official", resumedSession: "ses_fresh", reason: expect.stringContaining("RATE_LIMIT: 429") },
+      });
+
+      const calls = await s.calls();
+      expect(calls).toHaveLength(2);
+      expect(calls[0].args).not.toContain("--session-id");
+      expect(calls[1].args).toEqual(expect.arrayContaining(["--session-id", "ses_fresh"]));
+      expect(calls[1].stdin).toContain("the previous model provider (InferX) failed");
+      expect(calls[1].env.DEEPSEEK_API_KEY_SET).toBe(true);
+
+      const log = s.logs.join("");
+      expect(log).toContain("[dsh] InferX failed (RATE_LIMIT: 429 service failure");
+      expect(log).toContain("falling back to deepseek-official");
+      const patch = await fs.readFile(path.join(s.home, "paperclip.patch.yml"), "utf8");
+      expect(patch).toContain('    provider: "deepseek-official"\n    model: "deepseek-flash"');
+      expect(patch).toMatch(/- id: llm-deepseek\n  config:\n    models:\n      - id: "deepseek-flash"\n        name: "DeepSeek-V4.1-Flash"\n        contextWindow: 262144/);
+      expect(patch).not.toContain("llm-pi-ai");
+
+      const cooldown = JSON.parse(await fs.readFile(s.cooldownFile, "utf8"));
+      expect(cooldown.inferx.reason).toContain("RATE_LIMIT");
+      const minutes = (Date.parse(cooldown.inferx.until) - Date.now()) / 60_000;
+      expect(minutes).toBeGreaterThan(14);
+      expect(minutes).toBeLessThanOrEqual(15);
+    });
+
+    it("goes straight to deepseek-official while InferX cools down, then back to InferX", async () => {
+      const s = await withInferx();
+      await fs.writeFile(
+        s.cooldownFile,
+        JSON.stringify({ inferx: { until: new Date(Date.now() + 600_000).toISOString(), reason: "RATE_LIMIT: 429", at: new Date().toISOString() } }),
+      );
+      const result = await execute(s.ctx);
+      expect(result).toMatchObject({ provider: "deepseek", model: "deepseek-flash" });
+      expect(await s.calls()).toHaveLength(1);
+      expect(s.logs.join("")).toContain("InferX is cooling down until");
+
+      await fs.writeFile(
+        s.cooldownFile,
+        JSON.stringify({ inferx: { until: new Date(Date.now() - 1_000).toISOString(), reason: "old", at: "" } }),
+      );
+      const again = await execute(s.ctx);
+      expect(again).toMatchObject({ provider: "inferx" });
+    });
+
+    it("starts fresh on deepseek-official when InferX failed before a session existed, and on connection errors", async () => {
+      const s = await withInferx();
+      mode(s.ctx, "inferx-unreachable");
+      const result = await execute(s.ctx);
+      expect(result).toMatchObject({ exitCode: 0, provider: "deepseek" });
+      expect(s.logs.join("")).toContain("[dsh] InferX failed (TRANSPORT: Connection error.)");
+    });
+
+    it("does not fall back when fallbackProvider is none", async () => {
+      const s = await withInferx({ fallbackProvider: "none" });
+      mode(s.ctx, "inferx-down");
+      const result = await execute(s.ctx);
+      expect(result).toMatchObject({ provider: "inferx", errorCode: "rate_limited" });
+      expect(await s.calls()).toHaveLength(1);
+      await expect(fs.access(s.cooldownFile)).rejects.toThrow();
+    });
+
+    it("does not fall back without DEEPSEEK_API_KEY", async () => {
+      const s = await withInferx({ env: { FAKE_DSH_RECORD: "", FAKE_DSH_MODE: "inferx-down" } });
+      (s.ctx.config as { env: Record<string, string> }).env.FAKE_DSH_RECORD = path.join(path.dirname(s.home), "calls.ndjson");
+      const result = await execute(s.ctx);
+      expect(result.provider).toBe("inferx");
+      expect(await s.calls()).toHaveLength(1);
+    });
+
+    it("does not fall back when the task itself stopped (max_steps)", async () => {
+      const s = await withInferx();
+      mode(s.ctx, "max-steps");
+      const result = await execute(s.ctx);
+      expect(result.provider).toBe("inferx");
+      expect(await s.calls()).toHaveLength(1);
+      await expect(fs.access(s.cooldownFile)).rejects.toThrow();
+    });
   });
 
   it("stays on deepseek-official without an InferX key", async () => {

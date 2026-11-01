@@ -69,6 +69,31 @@ export interface ProviderRoute {
   retryPolicy: RetryPolicy | null;
 }
 
+/** One `llm-deepseek` catalog entry (dsh-llm-deepseek `models`); replaces dsh's built-in catalog. */
+export interface OfficialModelSpec {
+  id: string;
+  name: string;
+  contextWindow: number;
+  maxTokens?: number;
+  inputModalities?: string[];
+  systemPromptUpdate?: "in-history";
+  toolUpdate?: "in-history" | "addition-only";
+}
+
+/** dsh's built-in official catalog (dsh 0.2.1), which the adapter overrides per model. */
+const OFFICIAL_CONTEXT_WINDOW = 1_048_576;
+const OFFICIAL_CATALOG: OfficialModelSpec[] = [
+  {
+    id: "deepseek-flash",
+    name: "DeepSeek-V4.1-Flash",
+    contextWindow: OFFICIAL_CONTEXT_WINDOW,
+    inputModalities: ["text", "image"],
+    systemPromptUpdate: "in-history",
+    toolUpdate: "addition-only",
+  },
+  { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro", contextWindow: OFFICIAL_CONTEXT_WINDOW },
+];
+
 export interface ResolvedProvider {
   /** Route name dsh dispatches to (`agent-default-model.provider`). */
   provider: string;
@@ -80,6 +105,8 @@ export interface ResolvedProvider {
   /** How the provider was chosen, for logs and the environment test. */
   reason: string;
   warnings: string[];
+  /** deepseek-official only: catalog override (explicit context windows), or null for dsh's own. */
+  officialModels?: OfficialModelSpec[] | null;
 }
 
 const ROUTE_NAME_RE = /^[a-z][a-z0-9-]{0,47}$/;
@@ -204,15 +231,55 @@ function modelSpec(
   return spec;
 }
 
-function official(config: Record<string, unknown>, reason: string, warnings: string[]): ResolvedProvider {
-  if (str(config.model) === INFERX_DEFAULT_MODEL) {
+/**
+ * Catalog override for deepseek-official, or null when dsh's built-in catalog is right.
+ * `auto` keeps InferX Flash's 262,144-token window on DeepSeek's API too, so compaction behaves
+ * the same whichever route a run lands on; a configured contextWindow / maxTokens always applies.
+ */
+function officialCatalog(
+  model: string,
+  config: Record<string, unknown>,
+  warnings: string[],
+  sameWindowAsInferx: boolean,
+): OfficialModelSpec[] | null {
+  const configured = positiveInt(config.contextWindow);
+  const window = configured ?? (sameWindowAsInferx && model === "deepseek-flash" ? INFERX_CONTEXT_WINDOW : undefined);
+  const spec = modelSpec(model, config, warnings);
+  if (window === undefined && spec.maxTokens === undefined) return null;
+  return OFFICIAL_CATALOG.map((entry) => {
+    if (entry.id !== model) return { ...entry };
+    const out: OfficialModelSpec = { ...entry, contextWindow: window ?? entry.contextWindow };
+    if (spec.maxTokens !== undefined) out.maxTokens = spec.maxTokens;
+    return out;
+  });
+}
+
+function official(
+  config: Record<string, unknown>,
+  reason: string,
+  warnings: string[],
+  opts: { sameWindowAsInferx?: boolean; model?: string } = {},
+): ResolvedProvider {
+  let model: string;
+  if (opts.model) model = opts.model;
+  else if (str(config.model) === INFERX_DEFAULT_MODEL) {
     warnings.push(`Model ${INFERX_DEFAULT_MODEL} is served by InferX only; using deepseek-flash on ${DEEPSEEK_PROVIDER}.`);
-    return { provider: DEEPSEEK_PROVIDER, model: "deepseek-flash", keyEnv: DEEPSEEK_KEY_ENV, route: null, reason, warnings };
+    model = "deepseek-flash";
+  } else {
+    if (isForeignModel(config.model)) {
+      warnings.push(`Model "${String(config.model)}" is not a DeepSeek model; using ${resolveDshModel(config.model)}.`);
+    }
+    model = resolveDshModel(config.model);
   }
-  if (isForeignModel(config.model)) {
-    warnings.push(`Model "${String(config.model)}" is not a DeepSeek model; using ${resolveDshModel(config.model)}.`);
-  }
-  return { provider: DEEPSEEK_PROVIDER, model: resolveDshModel(config.model), keyEnv: DEEPSEEK_KEY_ENV, route: null, reason, warnings };
+  return {
+    provider: DEEPSEEK_PROVIDER,
+    model,
+    keyEnv: DEEPSEEK_KEY_ENV,
+    route: null,
+    reason,
+    warnings,
+    officialModels: officialCatalog(model, config, warnings, opts.sameWindowAsInferx === true),
+  };
 }
 
 function inferx(config: Record<string, unknown>, reason: string, warnings: string[]): ResolvedProvider {
@@ -250,18 +317,38 @@ function inferx(config: Record<string, unknown>, reason: string, warnings: strin
  * @param hasKey reports whether an env var holds a non-empty value in the run environment
  *               (only used for `provider: "auto"`).
  */
-export function resolveProvider(config: Record<string, unknown>, hasKey: (name: string) => boolean): ResolvedProvider {
+export interface ProviderCooldownView {
+  until: string;
+  reason: string;
+}
+
+export function resolveProvider(
+  config: Record<string, unknown>,
+  hasKey: (name: string) => boolean,
+  opts: { cooldown?: ProviderCooldownView | null } = {},
+): ResolvedProvider {
   const warnings: string[] = [];
   const requested = str(config.provider).toLowerCase();
 
   if (!requested || requested === "auto") {
     const model = str(config.model);
     const flashLike = FLASH_IDS.has(model) || model === INFERX_DEFAULT_MODEL || isForeignModel(model);
-    if (hasKey(INFERX_KEY_ENV) && flashLike) return inferx(config, `auto: ${INFERX_KEY_ENV} is set`, warnings);
+    const sameWindow = { sameWindowAsInferx: true };
+    if (hasKey(INFERX_KEY_ENV) && flashLike) {
+      if (opts.cooldown && hasKey(DEEPSEEK_KEY_ENV)) {
+        return official(
+          config,
+          `auto: InferX is cooling down until ${opts.cooldown.until} after "${opts.cooldown.reason}"`,
+          warnings,
+          { ...sameWindow, model: "deepseek-flash" },
+        );
+      }
+      return inferx(config, `auto: ${INFERX_KEY_ENV} is set`, warnings);
+    }
     const why = !hasKey(INFERX_KEY_ENV)
       ? `auto: ${INFERX_KEY_ENV} is not set`
       : `auto: model "${model}" is not a Flash model InferX serves`;
-    return official(config, why, warnings);
+    return official(config, why, warnings, sameWindow);
   }
   if (requested === DEEPSEEK_PROVIDER || requested === "deepseek") return official(config, "configured", warnings);
   if (requested === INFERX_PROVIDER) return inferx(config, "configured", warnings);
@@ -294,4 +381,25 @@ export function resolveProvider(config: Record<string, unknown>, hasKey: (name: 
     retryPolicy: readRetryPolicy(config.providerRetry, warnings, null),
   };
   return { provider: requested, model, keyEnv: apiKeyEnv, route, reason: "configured", warnings };
+}
+
+/**
+ * The route a failed run falls back to, or null when there is none. `auto` falls back to
+ * deepseek-official (deepseek-flash, InferX's 262,144-token window) unless `fallbackProvider` is
+ * "none"; other providers only with `fallbackProvider: "deepseek-official"`. Needs DEEPSEEK_API_KEY.
+ */
+export function resolveFallback(
+  config: Record<string, unknown>,
+  primary: ResolvedProvider,
+  hasKey: (name: string) => boolean,
+): ResolvedProvider | null {
+  if (primary.provider === DEEPSEEK_PROVIDER) return null;
+  const requested = str(config.provider).toLowerCase();
+  const setting = str(config.fallbackProvider).toLowerCase();
+  const isAuto = !requested || requested === "auto";
+  const enabled = setting === "none" || setting === "off" ? false : setting === DEEPSEEK_PROVIDER || setting === "deepseek" || isAuto;
+  if (!enabled || !hasKey(DEEPSEEK_KEY_ENV)) return null;
+  const warnings: string[] = [];
+  const model = primary.model === INFERX_DEFAULT_MODEL || FLASH_IDS.has(str(config.model)) ? "deepseek-flash" : resolveDshModel(primary.model);
+  return official(config, `fallback after ${primary.provider} failed`, warnings, { sameWindowAsInferx: true, model });
 }

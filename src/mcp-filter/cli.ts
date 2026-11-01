@@ -17,6 +17,7 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   // stdout is the MCP channel; diagnostics go to stderr (never print header values).
-  process.stderr.write(`paperclip-dsh-mcp-filter: ${err instanceof Error ? err.message : String(err)}\n`);
+  const code = err && typeof err === "object" && "code" in err ? ` (code ${String((err as { code: unknown }).code)})` : "";
+  process.stderr.write(`paperclip-dsh-mcp-filter: ${err instanceof Error ? err.message : String(err)}${code}\n`);
   process.exit(1);
 });

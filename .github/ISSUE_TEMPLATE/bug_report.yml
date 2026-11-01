@@ -1,0 +1,23 @@
+name: Bug report
+description: Something in the adapter does not work as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, what you saw instead. Paste the run log lines starting with `[paperclip]` and the last dsh events. Remove API keys and tokens.
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Paperclip version, `dsh --version`, `node --version`, adapter version/commit
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Agent adapterConfig (redacted)
+      render: json

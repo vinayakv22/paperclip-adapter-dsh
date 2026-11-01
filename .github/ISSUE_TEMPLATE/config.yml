@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: dsh itself (DeepSeek Harness)
+    url: https://github.com/deepseek-ai/deepseek-harness/issues
+    about: Bugs in dsh, its tools or models belong upstream.
+  - name: Paperclip
+    url: https://github.com/paperclipai/paperclip/issues
+    about: Bugs in Paperclip's server, UI or plugin loader.

@@ -28,16 +28,16 @@ export function getConfigSchema(): AdapterConfigSchema {
         options: [
           { value: "workspace-write", label: "Workspace write (edit files in the workspace)" },
           { value: "read-only", label: "Read only" },
-          { value: "auto", label: "Auto (dsh decides per tool)" },
+          { value: "danger-full-access", label: "Full access (no file sandbox)" },
         ],
-        hint: "Passed as --permission-mode. Approval policy is always 'never' (no one is there to approve).",
+        hint: "Set as DSH_PERMISSION_MODE for dsh's file sandbox. Approval requests are always rejected (no one is there to approve). Network is not sandboxed.",
         group: "Permissions",
       },
       {
         key: "addDirs",
         label: "Extra writable directories",
         type: "textarea",
-        hint: "One absolute path per line; each becomes --add-dir. E.g. a shared repo's .git when the workspace is a worktree.",
+        hint: "Not supported by dsh 0.2.x (one writable root per session); listed paths only produce a warning. Use Full access if the agent must write outside the workspace.",
         group: "Permissions",
       },
       {

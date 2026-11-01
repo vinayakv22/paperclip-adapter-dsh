@@ -52,7 +52,7 @@ and an exit code, so the bridge has to rebuild everything else:
 | Task context and wake prompt | Re-fetched over the API | Paperclip's own prompt sections | Native |
 | Readable transcript (thinking, tools) | Raw JSON lines | Yes (UI parser) | Yes |
 | Token usage and cost attribution | No | Yes, per run | Yes |
-| Success check | Exit code only | Exit 0 **and** `final.reason.kind == "completed"` | Native |
+| Success check | Exit code only | Exit 0, a `final` event **and** stop reason `completed` | Native |
 | Session resume / reset from Paperclip | Private state file | Paperclip session params | Native |
 | Skills and `AGENTS.md` bundle | Pasted into the prompt | Synced into `DSH_HOME` | Native |
 | Available today | Yes | Yes | Not merged |
@@ -89,7 +89,7 @@ Each run:
    agent's Paperclip skills into `skills/`, and writes `paperclip.patch.yml` (model, telemetry, MCP).
 3. Builds the prompt from Paperclip's standard sections (wake prompt, task context, handoff,
    heartbeat template) plus a short note on calling the Paperclip API with `curl`.
-4. Runs `dsh --profile headless --patch <file> --json --permission-mode <mode> --approval-policy never [--add-dir …] [--session-id …] -`
+4. Runs `DSH_PERMISSION_MODE=<mode> dsh --profile headless --patch <file> --json [--session-id …] -`
    with the prompt on stdin, streaming the NDJSON events to the run log.
 5. Parses the stream into usage, session id and the final answer, and reports them to Paperclip.
 
@@ -180,7 +180,6 @@ Pick **DeepSeek Harness (local)** as the agent's adapter, or set it through the 
   "adapterConfig": {
     "model": "deepseek-flash",
     "permissionMode": "workspace-write",
-    "addDirs": ["/home/paperclip/sites/example.com/.git"],
     "mcpServers": {
       "openseo": {
         "transport": "streamable-http",
@@ -200,8 +199,8 @@ Pick **DeepSeek Harness (local)** as the agent's adapter, or set it through the 
 | Key | Default | Meaning |
 |---|---|---|
 | `model` | `deepseek-flash` | `deepseek-flash`, `deepseek-v4-pro`, or aliases `flash` / `pro`. Non-DeepSeek ids fall back to the default. |
-| `permissionMode` | `workspace-write` | `workspace-write`, `read-only` or `auto`. Approval policy is always `never`. |
-| `addDirs` | none | Extra writable directories (array, or one per line), each passed as `--add-dir`. |
+| `permissionMode` | `workspace-write` | `workspace-write`, `read-only` or `danger-full-access`, set as `DSH_PERMISSION_MODE`. Approval requests are always rejected. |
+| `addDirs` | none | Not supported by dsh 0.2.x, which has one writable root per session; listed paths only produce a warning. |
 | `mcpServers` | none | JSON object `name → {transport, url, headers, command, args, env}`. |
 | `instructionsFilePath` | managed by Paperclip | Copied to `$DSH_HOME/AGENTS.md` before each run. |
 | `cwd` | Paperclip workspace | Fallback working directory. |
@@ -273,10 +272,14 @@ against its environment, so the generated file never contains the secret:
           "Authorization": !!js "`Bearer ${process.env.OPENSEO_API_KEY ?? \"\"}`"
 ```
 
-**Permissions.** `permissionMode` maps to `--permission-mode`. No one is present to approve tool
-calls, so `--approval-policy never` is always set: dsh denies what the mode does not allow instead
-of waiting. When the workspace is a git worktree whose object store lives elsewhere, add that
-`.git` directory to `addDirs` so commits work.
+**Permissions.** `permissionMode` is exported as `DSH_PERMISSION_MODE`, which the headless
+profile's `sandbox-policy` row reads (`read-only`, `workspace-write` or `danger-full-access`). The
+mode governs file writes only: shell commands keep network access. No one is present to approve tool
+calls, so the patch sets the `approval` row to `policy: never` (requests are rejected instead of
+waiting) and unmounts the interactive `permission` preset switcher, which refuses to activate under
+that policy. dsh 0.2.x has a single writable root per session (the workspace) and no `--add-dir`;
+an agent that must write outside its workspace, e.g. to a worktree's shared `.git`, needs
+`danger-full-access`.
 
 ## Sessions, skills and AGENTS.md
 
@@ -318,7 +321,7 @@ run retries once without it. Resetting the session in Paperclip starts fresh on 
 | `rate_limited` / `insufficient_balance` | DeepSeek returned 429 / 402. Wait, or top up the account. |
 | `Not resuming dsh session …` in the log | Expected after a workspace or `DSH_HOME` change, or after a swap from another adapter. |
 | `dsh stopped: max_steps` (or another reason) | dsh ended without completing; the run is marked failed. Check the transcript for the reason. |
-| Commits fail with permission errors in a worktree | Add the repository's `.git` directory to `addDirs`. |
+| Commits fail with permission errors in a worktree | dsh 0.2.x only allows writes under the workspace; use `permissionMode: danger-full-access` for that agent. |
 | MCP tool missing | Look for `[paperclip] MCP config references ${X} but it is not set` in the run log, and check the server name rules (`[A-Za-z0-9_-]`). |
 
 Run logs prefix the adapter's own lines with `[paperclip]`. The generated patch is at

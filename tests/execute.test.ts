@@ -69,14 +69,13 @@ describe("execute (fake dsh)", () => {
 
     const [call] = await calls();
     expect(call.args).toEqual([
-      "--profile", "headless", "--patch", path.join(home, "paperclip.patch.yml"), "--json",
-      "--permission-mode", "workspace-write", "--approval-policy", "never",
-      "--add-dir", "/srv/site/.git", "-",
+      "--profile", "headless", "--patch", path.join(home, "paperclip.patch.yml"), "--json", "-",
     ]);
     expect(await fs.realpath(call.cwd)).toBe(await fs.realpath(cwd));
     expect(call.env).toMatchObject({
       DSH_HOME: home,
       DSH_TELEMETRY_MODE: "DISABLED",
+      DSH_PERMISSION_MODE: "workspace-write",
       PAPERCLIP_RUN_ID: "run-1",
       PAPERCLIP_TASK_ID: "issue-7",
       PAPERCLIP_API_KEY_SET: true,
@@ -88,6 +87,8 @@ describe("execute (fake dsh)", () => {
     expect(patch).toContain('model: "deepseek-v4-pro"');
     expect(patch).toContain("process.env.OPENSEO_API_KEY");
     expect(patch).not.toContain("sk-test-not-real");
+    expect(patch).toMatch(/- id: approval\n  config:\n    policy: never/);
+    expect(patch).toMatch(/- id: permission\n  disabled: true/);
     expect(await fs.readFile(path.join(home, "AGENTS.md"), "utf8")).toContain("Ship carefully.");
 
     const meta = JSON.stringify(metas);

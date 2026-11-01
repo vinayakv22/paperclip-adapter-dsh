@@ -32,7 +32,7 @@ import {
 import { adapterExecutionTargetIsRemote, readAdapterExecutionTarget } from "@paperclipai/adapter-utils/execution-target";
 import { createProviderStoppedBoundary } from "@paperclipai/adapter-utils/provider-stopped-boundary";
 import { ADAPTER_TYPE } from "../constants.js";
-import { buildDshArgs, readDshConfig } from "./config.js";
+import { buildDshArgs, buildDshEnv, readDshConfig } from "./config.js";
 import { dshPaths, ensureDshHome, readSharedDeepseekEnv, resolveDshHome, sharedEnvFile, syncAgentsMd, writeIfChanged } from "./home.js";
 import { buildDshPatch, collectEnvRefs } from "./patch.js";
 import { parseSessionParams, sessionResumeBlocker } from "./session.js";
@@ -171,6 +171,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const paths = dshPaths(dshHome);
   env.DSH_HOME = dshHome;
   if (settings.disableTelemetry) env.DSH_TELEMETRY_MODE = "DISABLED";
+  Object.assign(env, buildDshEnv({ permissionMode: settings.permissionMode }));
 
   const runtimeEnv = Object.fromEntries(
     Object.entries(ensurePathInEnv({ ...sanitizeInheritedPaperclipEnv(process.env), ...env })).filter(
@@ -270,8 +271,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const { prompt, metrics } = buildPrompt(Boolean(sessionId));
     const args = buildDshArgs({
       patchFile: paths.patch,
-      permissionMode: settings.permissionMode,
-      addDirs: settings.addDirs,
       sessionId,
       extraArgs: settings.extraArgs,
     });
@@ -283,7 +282,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         commandArgs: args,
         commandNotes: [
           `Model ${settings.model} via ${paths.patch}; task on stdin (${prompt.length} chars).`,
-          `DSH_HOME ${dshHome}${settings.disableTelemetry ? "; session-log upload disabled" : ""}.`,
+          `DSH_HOME ${dshHome}${settings.disableTelemetry ? "; session-log upload disabled" : ""}; permission mode ${settings.permissionMode}, approvals rejected.`,
           agentsMd.chars > 0 ? `Agent instructions synced to ${paths.agentsMd} from ${instructionsFilePath}.` : "",
           skills.length > 0 ? `${skills.length} Paperclip skill(s) linked into ${paths.skills}.` : "",
           settings.mcpServers.length > 0 ? `MCP servers: ${settings.mcpServers.map((s) => s.name).join(", ")}.` : "",
@@ -291,7 +290,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         ].filter(Boolean),
         env: buildInvocationEnvForLogs(env, {
           runtimeEnv,
-          includeRuntimeKeys: ["DSH_HOME", "DSH_TELEMETRY_MODE"],
+          includeRuntimeKeys: ["DSH_HOME", "DSH_TELEMETRY_MODE", "DSH_PERMISSION_MODE"],
           resolvedCommand,
         }),
         prompt,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createServerAdapter } from "../src/index.js";
 import { resolveDshModel } from "../src/constants.js";
-import { buildDshArgs, readDshConfig } from "../src/server/config.js";
+import { buildDshArgs, buildDshEnv, readDshConfig } from "../src/server/config.js";
 import { compareVersions } from "../src/server/test.js";
 
 describe("readDshConfig", () => {
@@ -35,6 +35,8 @@ describe("readDshConfig", () => {
     expect(c.permissionMode).toBe("workspace-write");
     expect(c.addDirs).toEqual(["/srv/site/.git", "/srv/shared"]);
     expect(c.warnings.join("\n")).toMatch(/relative\/dir/);
+    expect(c.warnings.join("\n")).toMatch(/permissionMode "bogus" is not a dsh mode/);
+    expect(c.warnings.join("\n")).toMatch(/addDirs .* is not supported by dsh 0\.2\.x/);
     expect(c.disableTelemetry).toBe(false);
     expect(c.timeoutSec).toBe(600);
     expect(c.graceSec).toBe(15);
@@ -65,6 +67,14 @@ describe("readDshConfig", () => {
       expect(readDshConfig({ command: bad }).command).toBe("dsh");
     }
   });
+  it("accepts dsh's three sandbox modes", () => {
+    for (const mode of ["read-only", "workspace-write", "danger-full-access"]) {
+      const c = readDshConfig({ permissionMode: mode });
+      expect(c.permissionMode).toBe(mode);
+      expect(c.warnings).toEqual([]);
+    }
+    expect(readDshConfig({ permissionMode: "auto" }).permissionMode).toBe("workspace-write");
+  });
   it("resolves model aliases", () => {
     expect(resolveDshModel("deepseek-v4-flash")).toBe("deepseek-flash");
     expect(resolveDshModel("inherit")).toBe("deepseek-flash");
@@ -76,14 +86,19 @@ describe("readDshConfig", () => {
 describe("buildDshArgs", () => {
   it("puts launcher flags first and reads the task from stdin", () => {
     expect(
-      buildDshArgs({ patchFile: "/h/p.yml", permissionMode: "read-only", addDirs: ["/a", "/b"], sessionId: "ses_1", extraArgs: ["--x"] }),
+      buildDshArgs({ patchFile: "/h/p.yml", sessionId: "ses_1", extraArgs: ["--x"] }),
     ).toEqual([
       "--profile", "headless", "--patch", "/h/p.yml", "--json",
-      "--permission-mode", "read-only", "--approval-policy", "never",
-      "--add-dir", "/a", "--add-dir", "/b",
       "--session-id", "ses_1",
       "--x", "-",
     ]);
+  });
+  it("never passes flags the dsh 0.2.x headless app rejects", () => {
+    const args = buildDshArgs({ patchFile: "/h/p.yml", sessionId: null, extraArgs: [] });
+    for (const flag of ["--permission-mode", "--approval-policy", "--add-dir"]) expect(args).not.toContain(flag);
+  });
+  it("sets the permission mode through DSH_PERMISSION_MODE", () => {
+    expect(buildDshEnv({ permissionMode: "read-only" })).toEqual({ DSH_PERMISSION_MODE: "read-only" });
   });
 });
 

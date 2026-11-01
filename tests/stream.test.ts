@@ -37,6 +37,41 @@ describe("parseDshStream", () => {
     expect(isDshSuccess(1, s)).toBe(false);
   });
 
+  it("parses a real dsh 0.2.1-rc.5 headless stream (reason on turn_end, final without reason)", () => {
+    const stdout = [
+      '{"type":"session","sessionId":"session-90a687ff","cwd":"/tmp/ws"}',
+      '{"type":"status","phase":"turn_start","turn":1}',
+      '{"type":"status","phase":"step_start","turn":1,"step":1}',
+      '{"type":"thinking","text":""}',
+      '{"type":"text","text":"I\'ll run the requested command."}',
+      '{"type":"tool_call","callId":"call_00","tool":"bash","input":{"command":"curl -s https://example.com/"}}',
+      '{"type":"tool_result","callId":"call_00","status":"completed","result":"200"}',
+      '{"type":"status","phase":"step_end","turn":1,"step":1,"usage":{"inputTokens":5707,"outputTokens":85,"cacheReadTokens":0,"cacheWriteTokens":0,"totalTokens":5792}}',
+      '{"type":"status","phase":"step_start","turn":1,"step":2}',
+      '{"type":"text","text":"200"}',
+      '{"type":"status","phase":"step_end","turn":1,"step":2,"usage":{"inputTokens":173,"outputTokens":31,"cacheReadTokens":5632,"cacheWriteTokens":0,"totalTokens":5836}}',
+      '{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"completed"}}',
+      '{"type":"final","text":"200"}',
+    ].join("\n") + "\n";
+    const s = parseDshStream(stdout);
+    expect(s.sessionId).toBe("session-90a687ff");
+    expect(s.hasFinal).toBe(true);
+    expect(s.finalReason).toBe("completed");
+    expect(s.text).toBe("200");
+    expect(s.toolCalls).toBe(1);
+    expect(s.steps).toBe(2);
+    expect(s.usage).toMatchObject({ inputTokens: 5880, outputTokens: 116, cacheReadTokens: 5632 });
+    expect(isDshSuccess(0, s)).toBe(true);
+  });
+  it("does not take a turn_end reason without a final event", () => {
+    const s = parseDshStream('{"type":"status","phase":"turn_end","reason":{"kind":"completed"}}\n');
+    expect(s.hasFinal).toBe(false);
+    expect(isDshSuccess(0, s)).toBe(false);
+  });
+  it("prefers final.reason over turn_end", () => {
+    const s = parseDshStream('{"type":"status","phase":"turn_end","reason":{"kind":"completed"}}\n{"type":"final","reason":{"kind":"max_steps"},"text":""}\n');
+    expect(s.finalReason).toBe("max_steps");
+  });
   it("captures error events without a final event", () => {
     const s = parseDshStream(fixture("error.ndjson"));
     expect(s.hasFinal).toBe(false);

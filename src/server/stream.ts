@@ -2,11 +2,13 @@
  * Parser for `dsh --json` output: newline-delimited JSON events.
  *
  *   {type:"session", sessionId, cwd}                       first event
- *   {type:"status", phase, usage?, reason?}                turn/step boundaries; usage on step_end
+ *   {type:"status", phase, usage?, reason?}                turn/step boundaries; usage on step_end,
+ *                                                          reason:{kind} on turn_end
  *   {type:"thinking"|"text", text}
  *   {type:"tool_call", callId, tool, input}
  *   {type:"tool_result", callId, status, result, error?}
- *   {type:"final", sessionId, reason:{kind}|null, text}    last event on a normal end
+ *   {type:"final", text, sessionId?, reason?}              last event on a normal end (dsh 0.2.x
+ *                                                          puts the reason on turn_end, not here)
  *   {type:"error", message}                                fatal error, no final event
  */
 
@@ -25,7 +27,7 @@ export interface DshStreamSummary {
   cwd: string | null;
   /** True once a `{type:"final"}` event was seen. */
   hasFinal: boolean;
-  /** `final.reason.kind` ("completed" on success), or null. */
+  /** `final.reason.kind`, else the last `turn_end` reason kind ("completed" on success), or null. */
   finalReason: string | null;
   /** Final answer text: `final.text`, else the last `text` event. */
   text: string;
@@ -111,6 +113,11 @@ export function createDshStreamAccumulator() {
     finalEvent: null,
   };
   let lastText = "";
+  let turnEndReason: string | null = null;
+  const reasonKind = (reason: unknown): string | null =>
+    reason && typeof reason === "object" && typeof (reason as { kind?: unknown }).kind === "string"
+      ? (reason as { kind: string }).kind
+      : null;
 
   const handle = (event: Record<string, unknown>) => {
     switch (event.type) {
@@ -126,8 +133,9 @@ export function createDshStreamAccumulator() {
             sawStepUsage = true;
             addUsage(stepUsage, event.usage);
           }
-        } else if (event.phase === "turn_end" && event.usage && typeof event.usage === "object") {
-          addUsage(turnUsage, event.usage);
+        } else if (event.phase === "turn_end") {
+          if (event.usage && typeof event.usage === "object") addUsage(turnUsage, event.usage);
+          turnEndReason = reasonKind(event.reason) ?? turnEndReason;
         }
         break;
       }
@@ -146,11 +154,7 @@ export function createDshStreamAccumulator() {
         summary.hasFinal = true;
         summary.finalEvent = event;
         summary.sessionId = str(event.sessionId) ?? summary.sessionId;
-        const reason = event.reason;
-        summary.finalReason =
-          reason && typeof reason === "object" && typeof (reason as { kind?: unknown }).kind === "string"
-            ? ((reason as { kind: string }).kind)
-            : null;
+        summary.finalReason = reasonKind(event.reason);
         if (typeof event.text === "string" && event.text.trim()) lastText = event.text;
         break;
       }
@@ -183,6 +187,7 @@ export function createDshStreamAccumulator() {
         if (event) handle(event);
       }
       summary.text = lastText;
+      if (summary.hasFinal && summary.finalReason === null) summary.finalReason = turnEndReason;
       // Prefer per-step usage; fall back to turn totals for dsh builds that only report those.
       summary.usage = sawStepUsage ? stepUsage : turnUsage;
       return summary;

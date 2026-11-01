@@ -32,8 +32,8 @@ Required:
 
 Core fields:
 - model (string): deepseek-flash (default) | deepseek-v4-pro. Aliases: flash, pro.
-- permissionMode (string): workspace-write (default) | read-only | auto. Approval policy is always "never".
-- addDirs (string[] or one path per line): extra writable directories, each passed as --add-dir.
+- permissionMode (string): workspace-write (default) | read-only | danger-full-access, set as DSH_PERMISSION_MODE. Approval requests are always rejected.
+- addDirs (string[] or one path per line): not supported by dsh 0.2.x (one writable root per session); listed paths only produce a warning.
 - mcpServers (JSON object): name -> { transport: "streamable-http" | "stdio", url, headers, command, args, env }.
   Use \${ENV_NAME} for secrets; they are resolved from the run environment at load time.
 - instructionsFilePath (string): agent instructions; copied to $DSH_HOME/AGENTS.md every run.
@@ -53,7 +53,7 @@ Codex fallback:
   engine, extraArgs, a codex/codex-lb command) are ignored; a non-DeepSeek model becomes deepseek-flash.
 
 Notes:
-- Runs: dsh --profile headless --patch $DSH_HOME/paperclip.patch.yml --json --permission-mode <m> --approval-policy never [--add-dir …] [--session-id …] -
+- Runs: DSH_PERMISSION_MODE=<m> dsh --profile headless --patch $DSH_HOME/paperclip.patch.yml --json [--session-id …] -
 - The task prompt goes on stdin. Sessions resume with --session-id when cwd and DSH_HOME match; a vanished session retries fresh.
 - Usage is reported per run: input = fresh + cache-read + cache-write tokens, cached = cache-read tokens.
 `;

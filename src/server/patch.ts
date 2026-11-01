@@ -5,6 +5,9 @@
  * whole `config`; an `insert` row mounts new plugins. The adapter uses it to:
  *   - pin the model (`agent-default-model`),
  *   - turn off DeepSeek session-log upload (`session-log-deepseek`),
+ *   - reject approval requests (`approval` policy `never`): nobody is there to answer,
+ *   - unmount the UI permission presets (`permission`), which refuse to activate when the
+ *     approval default is `never` and only serve interactive mode switching,
  *   - mount MCP servers through `@deepseek-ai/dsh-mcp-client`.
  *
  * Secrets never land in the file: any `${NAME}` inside an MCP string becomes a
@@ -187,6 +190,17 @@ export function buildDshPatch(options: DshPatchOptions): string {
     `    provider: ${DEEPSEEK_PROVIDER}`,
     `    model: ${JSON.stringify(options.model)}`,
   ];
+  lines.push(
+    "",
+    "# Unattended run: approval requests are rejected instead of waiting for a human.",
+    "- id: approval",
+    "  config:",
+    "    policy: never",
+    "",
+    "# Interactive preset switcher; it fails to activate with policy never and is not needed headless.",
+    "- id: permission",
+    "  disabled: true",
+  );
   if (options.disableTelemetry) {
     lines.push("", "# Keep session transcripts on this host: no upload to DeepSeek.", "- id: session-log-deepseek", "  disabled: true");
   }

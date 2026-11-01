@@ -33,7 +33,8 @@ export const MODEL_ALIASES: Record<string, string> = {
   "deepseek-v4-flash": "deepseek-flash",
 };
 
-export const PERMISSION_MODES = ["workspace-write", "read-only", "auto"] as const;
+/** dsh's sandbox modes (`DSH_PERMISSION_MODE`, read by the headless profile's sandbox-policy row). */
+export const PERMISSION_MODES = ["workspace-write", "read-only", "danger-full-access"] as const;
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 export const DEFAULT_PERMISSION_MODE: PermissionMode = "workspace-write";
 
@@ -83,4 +84,10 @@ export function looksLikeDshCommand(command: string): boolean {
 export function resolvePermissionMode(value: unknown): PermissionMode {
   const raw = typeof value === "string" ? value.trim() : "";
   return (PERMISSION_MODES as readonly string[]).includes(raw) ? (raw as PermissionMode) : DEFAULT_PERMISSION_MODE;
+}
+
+/** True when a non-empty `permissionMode` was not one of dsh's modes and fell back to the default. */
+export function isUnknownPermissionMode(value: unknown): boolean {
+  const raw = typeof value === "string" ? value.trim() : "";
+  return raw.length > 0 && !(PERMISSION_MODES as readonly string[]).includes(raw);
 }
